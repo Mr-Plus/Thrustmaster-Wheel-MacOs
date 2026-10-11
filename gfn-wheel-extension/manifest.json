@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "GeForce NOW - Thrustmaster TS-PC Racer Xbox Bridge",
+  "version": "1.0.0",
+  "description": "Remappe le volant Thrustmaster TS-PC Racer en manette Xbox standard 120Hz pour GeForce NOW et Forza Horizon",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://play.geforcenow.com/*",
+        "https://*.geforcenow.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["bridge.js"],
+      "matches": [
+        "https://play.geforcenow.com/*",
+        "https://*.geforcenow.com/*"
+      ]
+    }
+  ]
+}

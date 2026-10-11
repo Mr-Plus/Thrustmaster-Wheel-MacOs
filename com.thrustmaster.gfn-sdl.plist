@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.thrustmaster.gfn-sdl</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/sh</string>
+        <string>-c</string>
+        <string>launchctl setenv SDL_JOYSTICK_IOKIT 1 &amp;&amp; launchctl setenv SDL_JOYSTICK_MFI 0 &amp;&amp; launchctl setenv SDL_JOYSTICK_HIDAPI 0 &amp;&amp; launchctl setenv SDL_GAMECONTROLLERCONFIG "030040694f04000089b6000000070000,Thrustmaster TS-PC Racer,platform:Mac OS X,a:b0,b:b1,x:b2,y:b3,leftshoulder:b4,rightshoulder:b5,back:b8,start:b9,leftx:a0,lefttrigger:a2~,righttrigger:a3~,dpup:h0.1,dpright:h0.2,dpdown:h0.4,dpleft:h0.8,"</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>

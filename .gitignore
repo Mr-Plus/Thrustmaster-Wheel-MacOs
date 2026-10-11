@@ -1,0 +1,17 @@
+# macOS
+.DS_Store
+*.swp
+*.lock
+
+# Build artifacts
+TS-PC Control.app/
+tspc-cli
+*.o
+*.dylib
+*.dSYM/
+build/
+DerivedData/
+
+# Temporary files
+/tmp/
+*.log
