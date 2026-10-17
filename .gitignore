@@ -4,10 +4,12 @@
 *.lock
 
 # Build artifacts
+TS2GFN.app/
 TS-PC Control.app/
 tspc-cli
 *.o
 *.dylib
+*.iconset/
 *.dSYM/
 build/
 DerivedData/

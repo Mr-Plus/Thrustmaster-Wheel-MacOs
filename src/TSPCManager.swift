@@ -1,34 +1,26 @@
 import Foundation
 import SwiftUI
 import Combine
-import GameController
+import AppKit
 
-public enum TabSelection: String, CaseIterable, Identifiable {
-    case dashboard = "Télémétrie"
-    case settings = "Réglages & FFB"
-    case geforceNow = "GeForce NOW (Forza)"
-    case games = "Jeux & Profils"
-    
-    public var id: String { self.rawValue }
-    
-    public var icon: String {
-        switch self {
-        case .dashboard: return "gauge.with.needle"
-        case .settings: return "slider.horizontal.3"
-        case .geforceNow: return "cloud.fill"
-        case .games: return "gamecontroller"
-        }
-    }
-}
+// ==============================================================================
+// TS2GFN — Gestionnaire Matériel IOKit & État Applicatif
+// ==============================================================================
 
 public class TSPCManager: ObservableObject {
+    // --------------------------------------------------------------------------
+    // Statut Matériel & Connexion
+    // --------------------------------------------------------------------------
     @Published public var connectionStatus: TSPCConnectionStatus = .init(rawValue: 0)
     @Published public var statusMessage: String = "Recherche du volant..."
     @Published public var isConnected: Bool = false
     @Published public var isBootMode: Bool = false
-    @Published public var selectedTab: TabSelection = .dashboard
+    @Published public var autoUnlockEnabled: Bool = true
+    @Published public var isGfnRunning: Bool = false
     
-    // Telemetry
+    // --------------------------------------------------------------------------
+    // Télémétrie en direct (affichée dans la modale Télémétrie)
+    // --------------------------------------------------------------------------
     @Published public var wheelAngle: Double = 0.0
     @Published public var wheelRaw: UInt16 = 32768
     @Published public var gasPercent: Double = 0.0
@@ -37,21 +29,25 @@ public class TSPCManager: ObservableObject {
     @Published public var hatDirection: Int = -1
     @Published public var pressedButtons: Set<Int> = []
     
-    // Hardware configuration
-    @Published public var currentRange: Double = 900.0 {
+    // --------------------------------------------------------------------------
+    // Réglages Volant & Retour de Force
+    // --------------------------------------------------------------------------
+    @Published public var currentRange: Double = 1080.0 {
         didSet {
             if currentRange != oldValue {
                 _ = tspc_set_rotation_range(UInt16(currentRange))
             }
         }
     }
-    @Published public var masterGain: Double = 80.0 {
+    
+    @Published public var masterGain: Double = 100.0 {
         didSet {
             if masterGain != oldValue {
                 _ = tspc_set_gain(Int32(masterGain))
             }
         }
     }
+    
     @Published public var autocenterForce: Double = 50.0 {
         didSet {
             if autocenterForce != oldValue {
@@ -59,6 +55,7 @@ public class TSPCManager: ObservableObject {
             }
         }
     }
+    
     @Published public var autocenterEnabled: Bool = true {
         didSet {
             if autocenterEnabled != oldValue {
@@ -66,75 +63,183 @@ public class TSPCManager: ObservableObject {
             }
         }
     }
+    
     @Published public var pedalsInverted: Bool = true {
         didSet {
             tspc_set_pedals_inverted(pedalsInverted)
         }
     }
     
-    @Published public var autoUnlockEnabled: Bool = true
-    
-    // GeForce NOW / Xbox Controller Emulation
-    @Published public var isHttpBridgeRunning: Bool = false
-    @Published public var virtualXboxControllerActive: Bool = false
-    @Published public var gfnSteeringLinearity: Double = 1.2
-    @Published public var gfnDeadzone: Double = 0.02
-    @Published public var gfnTargetRange: Double = 540.0
-    @Published public var copiedScriptAlert: Bool = false
-    
-    // Computed Xbox Controller State (for real-time preview)
-    public var xboxStickX: Double {
-        let norm = (Double(wheelRaw) - 32768.0) / 32768.0
-        if abs(norm) < gfnDeadzone { return 0.0 }
-        let sign = norm >= 0 ? 1.0 : -1.0
-        let val = pow(abs(norm), gfnSteeringLinearity) * sign
-        return max(-1.0, min(1.0, val))
+    // Étalonnage Dynamique Passerelle GFN / Cloud
+    @Published public var steeringRatio: Double = 0.5 {
+        didSet {
+            saveConfig()
+        }
     }
     
-    public var xboxRT: Double {
-        return max(0.0, min(1.0, gasPercent / 100.0))
+    @Published public var ffbGain: Double = 1.5 {
+        didSet {
+            saveConfig()
+        }
     }
     
-    public var xboxLT: Double {
-        return max(0.0, min(1.0, brakePercent / 100.0))
+    // État d'ouverture des fenêtres modales
+    @Published public var showTelemetryModal: Bool = false
+    @Published public var showHelpModal: Bool = false
+
+    // --------------------------------------------------------------------------
+    // Mappage des Boutons Volant GT (buttons_mapping.conf)
+    // --------------------------------------------------------------------------
+    @Published public var btnShiftUp: Int = 2
+    @Published public var btnShiftDown: Int = 1
+    @Published public var btnA: Int = 6
+    @Published public var btnB: Int = 5
+    @Published public var btnX: Int = 4
+    @Published public var btnY: Int = 3
+    @Published public var btnL2: Int = 10
+    @Published public var btnR2: Int = 9
+    @Published public var btnSelect: Int = 7
+    @Published public var btnStart: Int = 8
+    @Published public var btnL3: Int = 11
+    @Published public var btnR3: Int = 12
+    @Published public var btnHome: Int = 13
+
+    public func buttonLabel(for index: Int) -> String {
+        if index == btnShiftDown { return "\(index) (Pal. G)" }
+        if index == btnShiftUp { return "\(index) (Pal. D)" }
+        if index == btnY { return "\(index) (△ Triangle)" }
+        if index == btnX { return "\(index) (□ Carré)" }
+        if index == btnB { return "\(index) (○ Rond)" }
+        if index == btnA { return "\(index) (✕ Croix)" }
+        if index == btnSelect { return "\(index) (SE / View)" }
+        if index == btnStart { return "\(index) (ST / Menu)" }
+        if index == btnR2 { return "\(index) (R2)" }
+        if index == btnL2 { return "\(index) (L2)" }
+        if index == btnL3 { return "\(index) (11 / L3)" }
+        if index == btnR3 { return "\(index) (12 / R3)" }
+        if index == btnHome { return "\(index) (PS / Home)" }
+        return "Bouton \(index)"
     }
-    
-    public var xboxLB: Bool { pressedButtons.contains(5) } // Palette Gauche
-    public var xboxRB: Bool { pressedButtons.contains(6) } // Palette Droite
-    public var xboxA: Bool { pressedButtons.contains(1) }
-    public var xboxB: Bool { pressedButtons.contains(2) }
-    public var xboxX: Bool { pressedButtons.contains(3) }
-    public var xboxY: Bool { pressedButtons.contains(4) }
-    public var xboxBack: Bool { pressedButtons.contains(9) }
-    public var xboxStart: Bool { pressedButtons.contains(10) }
-    
+
+    // --------------------------------------------------------------------------
+    // Persistance Configuration (buttons_mapping.conf)
+    // --------------------------------------------------------------------------
+    public func loadButtonMapping() {
+        let paths = [
+            "/Users/matthieu.verpillier/Documents/Thrustmaster/buttons_mapping.conf",
+            "buttons_mapping.conf",
+            "/tmp/tspc_buttons_mapping.conf"
+        ]
+        for path in paths {
+            if let content = try? String(contentsOfFile: path, encoding: .utf8) {
+                for line in content.components(separatedBy: .newlines) {
+                    let trimmed = line.trimmingCharacters(in: .whitespaces)
+                    if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+                    let parts = trimmed.components(separatedBy: "=")
+                    if parts.count == 2 {
+                        let key = parts[0].trimmingCharacters(in: .whitespaces)
+                        let valStr = parts[1].trimmingCharacters(in: .whitespaces)
+                        if let dVal = Double(valStr) {
+                            if key == "steering_ratio" { steeringRatio = dVal }
+                            else if key == "ffb_gain" { ffbGain = dVal }
+                        }
+                        if let val = Int(valStr) {
+                            switch key {
+                            case "shift_up": btnShiftUp = val
+                            case "shift_down": btnShiftDown = val
+                            case "btn_a": btnA = val
+                            case "btn_b": btnB = val
+                            case "btn_x": btnX = val
+                            case "btn_y": btnY = val
+                            case "btn_l2": btnL2 = val
+                            case "btn_r2": btnR2 = val
+                            case "btn_select": btnSelect = val
+                            case "btn_start": btnStart = val
+                            case "btn_l3": btnL3 = val
+                            case "btn_r3": btnR3 = val
+                            case "btn_home": btnHome = val
+                            default: break
+                            }
+                        }
+                    }
+                }
+                break
+            }
+        }
+    }
+
+    public func saveConfig() {
+        let content = """
+        # Configuration du mappage des boutons Thrustmaster TS-PC Racer -> Logitech G29
+        # Volant GT / Open Wheel
+        shift_up=\(btnShiftUp)
+        shift_down=\(btnShiftDown)
+        btn_a=\(btnA)
+        btn_b=\(btnB)
+        btn_x=\(btnX)
+        btn_y=\(btnY)
+        btn_l2=\(btnL2)
+        btn_r2=\(btnR2)
+        btn_select=\(btnSelect)
+        btn_start=\(btnStart)
+        btn_l3=\(btnL3)
+        btn_r3=\(btnR3)
+        btn_home=\(btnHome)
+
+        # Calibration Angle & FFB
+        steering_ratio=\(String(format: "%.2f", steeringRatio))
+        ffb_gain=\(String(format: "%.2f", ffbGain))
+        \n
+        """
+        let paths = [
+            "/Users/matthieu.verpillier/Documents/Thrustmaster/buttons_mapping.conf",
+            "/tmp/tspc_buttons_mapping.conf"
+        ]
+        for p in paths {
+            try? content.write(toFile: p, atomically: true, encoding: .utf8)
+        }
+    }
+
+    public func launchCalibrationAssistant() {
+        let script = """
+        tell application "Terminal"
+            activate
+            do script "cd '/Users/matthieu.verpillier/Documents/Thrustmaster' && ./tspc-cli calibrate-buttons"
+        end tell
+        """
+        if let appleScript = NSAppleScript(source: script) {
+            var error: NSDictionary?
+            appleScript.executeAndReturnError(&error)
+        }
+    }
+
+    // --------------------------------------------------------------------------
+    // Cycle de vie & Initialisation IOKit
+    // --------------------------------------------------------------------------
     private var pollTimer: Timer?
-    
+
     public init() {
         tspc_init()
-        currentRange = Double(tspc_get_current_range())
+        let r = tspc_get_current_range()
+        currentRange = (r >= 140 && r <= 1080) ? Double(r) : 1080.0
         pedalsInverted = tspc_get_pedals_inverted()
-        
-        // Auto-start local HTTP telemetry bridge for GeForce NOW / Chrome
-        _ = tspc_start_http_server(8765)
-        isHttpBridgeRunning = tspc_is_http_server_running()
+        loadButtonMapping()
         
         setupCallbacks()
         refreshStatus()
         
-        // Background watch timer for hotplug / bootloader
+        // Surveillance matérielle et processus en arrière-plan
         pollTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
             self?.checkHardware()
         }
     }
-    
+
     deinit {
         pollTimer?.invalidate()
-        tspc_stop_http_server()
         tspc_stop_listening()
         tspc_cleanup()
     }
-    
+
     private func setupCallbacks() {
         let telemCallback: TSPCTelemetryCallback = { telemPtr, context in
             guard let telem = telemPtr?.pointee, let ctx = context else { return }
@@ -158,51 +263,27 @@ public class TSPCManager: ObservableObject {
             }
         }
         
-        let connCallback: TSPCConnectionCallback = { status, infoPtr, context in
+        let connCallback: TSPCConnectionCallback = { status, descPtr, context in
             guard let ctx = context else { return }
             let manager = Unmanaged<TSPCManager>.fromOpaque(ctx).takeUnretainedValue()
-            let msg = infoPtr != nil ? String(cString: infoPtr!) : ""
+            let msg = descPtr != nil ? String(cString: descPtr!) : ""
             
             DispatchQueue.main.async {
                 manager.connectionStatus = status
                 manager.isConnected = (status.rawValue != 0)
                 manager.isBootMode = (status.rawValue == 1)
                 manager.statusMessage = msg
+                
+                if manager.isBootMode && manager.autoUnlockEnabled {
+                    manager.unlock()
+                }
             }
         }
         
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
-        _ = tspc_start_listening(telemCallback, connCallback, selfPtr)
-        
-        NotificationCenter.default.addObserver(forName: .GCControllerDidConnect, object: nil, queue: .main) { [weak self] _ in
-            self?.checkVirtualXboxController()
-        }
-        NotificationCenter.default.addObserver(forName: .GCControllerDidDisconnect, object: nil, queue: .main) { [weak self] _ in
-            self?.checkVirtualXboxController()
-        }
-        checkVirtualXboxController()
+        tspc_start_listening(telemCallback, connCallback, selfPtr)
     }
-    
-    public func checkVirtualXboxController() {
-        let controllers = GCController.controllers()
-        self.virtualXboxControllerActive = controllers.contains {
-            ($0.vendorName ?? "").localizedCaseInsensitiveContains("Xbox") || $0.extendedGamepad != nil
-        }
-    }
-    
-    public func ensureVirtualXboxController() {
-        DispatchQueue.global(qos: .userInitiated).async {
-            let task = Process()
-            task.launchPath = "/bin/sh"
-            task.arguments = ["-c", "/Applications/OpenJoystickDriver.app/Contents/MacOS/OpenJoystickDriver --headless compat set apple-gamecontroller"]
-            try? task.run()
-            task.waitUntilExit()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                self.checkVirtualXboxController()
-            }
-        }
-    }
-    
+
     public func refreshStatus() {
         var desc = [CChar](repeating: 0, count: 256)
         let st = tspc_get_connection_status(&desc, 256)
@@ -219,15 +300,25 @@ public class TSPCManager: ObservableObject {
             }
         }
     }
-    
+
     private func checkHardware() {
         var desc = [CChar](repeating: 0, count: 256)
         let st = tspc_get_connection_status(&desc, 256)
         if st != connectionStatus {
             refreshStatus()
         }
+        
+        // Détection instantanée et légère en mémoire de GeForce NOW (zéro sous-processus/fork)
+        let running = NSWorkspace.shared.runningApplications.contains { app in
+            if let bid = app.bundleIdentifier, bid.contains("com.nvidia.gfnpc") { return true }
+            if let name = app.localizedName, name.contains("GeForce NOW") || name.contains("GeForceNOW") { return true }
+            return false
+        }
+        if isGfnRunning != running {
+            isGfnRunning = running
+        }
     }
-    
+
     public func unlock() {
         statusMessage = "Envoi de la séquence de déblocage 1080°..."
         DispatchQueue.global(qos: .userInitiated).async {
@@ -245,85 +336,23 @@ public class TSPCManager: ObservableObject {
             }
         }
     }
-    
-    public func applyPreset(degrees: Double) {
-        currentRange = degrees
-    }
-    
-    public func toggleHttpBridge() {
-        if isHttpBridgeRunning {
-            tspc_stop_http_server()
-        } else {
-            _ = tspc_start_http_server(8765)
-        }
-        isHttpBridgeRunning = tspc_is_http_server_running()
-    }
-    
-    public func applyGfnPreset(_ preset: String) {
-        switch preset {
-        case "arcade":
-            currentRange = 360.0
-            gfnTargetRange = 360.0
-            gfnSteeringLinearity = 1.0
-            gfnDeadzone = 0.02
-            autocenterForce = 60.0
-            autocenterEnabled = true
-        case "balanced":
-            currentRange = 540.0
-            gfnTargetRange = 540.0
-            gfnSteeringLinearity = 1.2
-            gfnDeadzone = 0.02
-            autocenterForce = 55.0
-            autocenterEnabled = true
-        case "sim":
-            currentRange = 900.0
-            gfnTargetRange = 900.0
-            gfnSteeringLinearity = 1.35
-            gfnDeadzone = 0.01
-            autocenterForce = 50.0
-            autocenterEnabled = true
-        default:
-            break
-        }
-    }
-    
-    public func testFFB(_ type: String) {
-        DispatchQueue.global(qos: .userInitiated).async {
-            if type == "left" {
-                tspc_test_pulse(-1)
-            } else if type == "right" {
-                tspc_test_pulse(1)
-            } else if type == "rumble" {
-                tspc_test_pulse(0)
-            } else if type == "center" {
-                _ = tspc_set_autocenter(100, true)
-                Thread.sleep(forTimeInterval: 0.5)
-                _ = tspc_set_autocenter(Int32(self.autocenterForce), self.autocenterEnabled)
-            }
-        }
-    }
-    
+
+    // --------------------------------------------------------------------------
+    // Lancement de GeForce NOW
+    // --------------------------------------------------------------------------
     public func launchGeForceNowApp() {
-        let mapping = "030040694f04000089b6000000070000,Thrustmaster TS-PC Racer,platform:Mac OS X,a:b0,b:b1,x:b2,y:b3,leftshoulder:b4,rightshoulder:b5,back:b8,start:b9,leftx:a0,lefttrigger:a2~,righttrigger:a3~,dpup:h0.1,dpright:h0.2,dpdown:h0.4,dpleft:h0.8,"
-        
-        ensureVirtualXboxController()
-        
+        let defaultScript = "/Users/matthieu.verpillier/Documents/Thrustmaster/Lancer GeForce NOW (Volant).command"
+        let scriptPath: String
+        if FileManager.default.fileExists(atPath: defaultScript) {
+            scriptPath = defaultScript
+        } else if let bundleScript = Bundle.main.path(forResource: "Lancer GeForce NOW (Volant)", ofType: "command") {
+            scriptPath = bundleScript
+        } else {
+            scriptPath = defaultScript
+        }
         let task = Process()
-        task.launchPath = "/bin/sh"
-        task.arguments = ["-c", """
-            /Applications/OpenJoystickDriver.app/Contents/MacOS/OpenJoystickDriver --headless compat set apple-gamecontroller 2>/dev/null
-            launchctl unsetenv SDL_JOYSTICK_MFI
-            launchctl unsetenv SDL_JOYSTICK_HIDAPI
-            launchctl setenv SDL_GAMECONTROLLERCONFIG "\(mapping)"
-            
-            if pgrep -x "GeForceNOW" >/dev/null; then
-                killall "GeForceNOW" 2>/dev/null
-                sleep 1.5
-            fi
-            
-            open -a "/Applications/GeForceNOW.app" \
-                --env SDL_GAMECONTROLLERCONFIG="\(mapping)"
-        """]
+        task.launchPath = "/bin/bash"
+        task.arguments = [scriptPath]
         try? task.run()
     }
 }

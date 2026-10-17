@@ -171,21 +171,21 @@ static void on_hid_input_value(void *context, IOReturn result, void *sender, IOH
             double norm = ((double)val - 32768.0) / 32768.0;
             s_telemetry.wheelAngleDeg = norm * ((double)s_currentRange / 2.0);
             changed = true;
-        } else if (usage == 0x36) { // Accelerator (Slider)
+        } else if (usage == 0x35) { // Physical Accelerator
             s_telemetry.gasRaw = (int)val;
             float pct = s_pedalsInverted ? (float)(1023 - val) / 10.23f : (float)val / 10.23f;
             if (pct < 0.0f) pct = 0.0f;
             if (pct > 100.0f) pct = 100.0f;
             s_telemetry.gasPercent = pct;
             changed = true;
-        } else if (usage == 0x35) { // Brake (Rz)
+        } else if (usage == 0x31) { // Physical Brake
             s_telemetry.brakeRaw = (int)val;
             float pct = s_pedalsInverted ? (float)(1023 - val) / 10.23f : (float)val / 10.23f;
             if (pct < 0.0f) pct = 0.0f;
             if (pct > 100.0f) pct = 100.0f;
             s_telemetry.brakePercent = pct;
             changed = true;
-        } else if (usage == 0x31) { // Clutch (Y)
+        } else if (usage == 0x36) { // Physical Clutch
             s_telemetry.clutchRaw = (int)val;
             float pct = s_pedalsInverted ? (float)(1023 - val) / 10.23f : (float)val / 10.23f;
             if (pct < 0.0f) pct = 0.0f;
@@ -232,15 +232,15 @@ static void on_device_matched(void *context, IOReturn result, void *sender, IOHI
                         s_telemetry.wheelRaw = (uint16_t)val;
                         double norm = ((double)val - 32768.0) / 32768.0;
                         s_telemetry.wheelAngleDeg = norm * ((double)s_currentRange / 2.0);
-                    } else if (usage == 0x36) {
+                    } else if (usage == 0x35) { // Physical Accelerator
                         s_telemetry.gasRaw = (int)val;
                         float pct = s_pedalsInverted ? (float)(1023 - val) / 10.23f : (float)val / 10.23f;
                         s_telemetry.gasPercent = pct < 0 ? 0 : (pct > 100 ? 100 : pct);
-                    } else if (usage == 0x35) {
+                    } else if (usage == 0x31) { // Physical Brake
                         s_telemetry.brakeRaw = (int)val;
                         float pct = s_pedalsInverted ? (float)(1023 - val) / 10.23f : (float)val / 10.23f;
                         s_telemetry.brakePercent = pct < 0 ? 0 : (pct > 100 ? 100 : pct);
-                    } else if (usage == 0x31) {
+                    } else if (usage == 0x36) { // Physical Clutch
                         s_telemetry.clutchRaw = (int)val;
                         float pct = s_pedalsInverted ? (float)(1023 - val) / 10.23f : (float)val / 10.23f;
                         s_telemetry.clutchPercent = pct < 0 ? 0 : (pct > 100 ? 100 : pct);

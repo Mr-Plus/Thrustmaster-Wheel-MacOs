@@ -1,25 +1,7 @@
 import SwiftUI
 
 struct ButtonsVisualView: View {
-    let pressedButtons: Set<Int>
-    let hatDirection: Int
-    
-    // Mapping common Thrustmaster buttons
-    let buttonLabels: [Int: String] = [
-        1: "1 (X)",
-        2: "2 (A)",
-        3: "3 (B)",
-        4: "4 (Y)",
-        5: "5 (L1)",
-        6: "6 (R1)",
-        7: "7 (L2)",
-        8: "8 (R2)",
-        9: "9 (SELECT)",
-        10: "10 (START)",
-        11: "11 (L3)",
-        12: "12 (R3)",
-        13: "13 (MODE)"
-    ]
+    @ObservedObject var manager: TSPCManager
     
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -30,6 +12,38 @@ struct ButtonsVisualView: View {
                 Text("BOUTONS & CROIX DIRECTIONNELLE")
                     .font(.system(size: 13, weight: .bold))
                     .foregroundColor(.white)
+                
+                Spacer()
+                
+                Button(action: {
+                    manager.launchCalibrationAssistant()
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "slider.horizontal.below.rectangle")
+                            .font(.system(size: 10, weight: .bold))
+                        Text("Calibrer")
+                            .font(.system(size: 11, weight: .bold))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.blue)
+                    .cornerRadius(6)
+                }
+                .buttonStyle(PlainButtonStyle())
+                
+                Button(action: {
+                    manager.loadButtonMapping()
+                }) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(.white)
+                        .padding(5)
+                        .background(Color(white: 0.25))
+                        .cornerRadius(6)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .help("Recharger buttons_mapping.conf")
             }
             
             HStack(alignment: .top, spacing: 18) {
@@ -74,7 +88,7 @@ struct ButtonsVisualView: View {
                         
                         // Center dot
                         Circle()
-                            .fill(hatDirection >= 0 ? Color.yellow : Color(white: 0.35))
+                            .fill(manager.hatDirection >= 0 ? Color.yellow : Color(white: 0.35))
                             .frame(width: 9, height: 9)
                     }
                 }
@@ -90,7 +104,7 @@ struct ButtonsVisualView: View {
                     GridItem(.flexible(), spacing: 8)
                 ], spacing: 8) {
                     ForEach(1...13, id: \.self) { btnIndex in
-                        let isPressed = pressedButtons.contains(btnIndex)
+                        let isPressed = manager.pressedButtons.contains(btnIndex)
                         
                         HStack(spacing: 6) {
                             Circle()
@@ -98,7 +112,7 @@ struct ButtonsVisualView: View {
                                 .frame(width: 8, height: 8)
                                 .shadow(color: isPressed ? .red : .clear, radius: 4)
                             
-                            Text(buttonLabels[btnIndex] ?? "BTN \(btnIndex)")
+                            Text(manager.buttonLabel(for: btnIndex))
                                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                                 .foregroundColor(.white)
                                 .lineLimit(1)
@@ -128,6 +142,6 @@ struct ButtonsVisualView: View {
     }
     
     private func isDirActive(_ dirs: [Int]) -> Bool {
-        return dirs.contains(hatDirection)
+        return dirs.contains(manager.hatDirection)
     }
 }
