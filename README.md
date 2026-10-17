@@ -1,138 +1,143 @@
-# TS-PC Racer Control pour macOS (Apple Silicon & Intel)
+# TS2GFN — Thrustmaster TS-PC Racer vers GeForce NOW pour macOS (Apple Silicon & Intel)
 
-> [!CAUTION]
-> **Statut du projet : Inachevé / Abandonné pour l'application native GeForce NOW.**  
-> Pour comprendre l'architecture, ce qui fonctionne (déblocage USB IOKit, panneau de contrôle SwiftUI, télémétrie HTTP, jeux natifs/Wine), et les verrous techniques d'Apple et de GeForce NOW ayant motivé l'arrêt, consultez le rapport complet :  
-> 👉 **[PROJECT_SUMMARY.md](PROJECT_SUMMARY.md)**
+![TS2GFN Logo](src/logo_transparent.png)
 
-Pilote et panneau de contrôle complet en espace utilisateur (IOKit / User-space) pour le volant **Thrustmaster TS-PC Racer** sur macOS.
-
-Ce logiciel résout le problème historique des volants Thrustmaster sous macOS :
-1. **Sortie du mode bootloader** : À la connexion USB, le volant s'énumère en mode générique restreint (`0x044f:0xb65d`). Ce pilote lui envoie la commande USB de bascule haute résolution pour l'activer en tant que vrai **Thrustmaster TS-PC Racer** (`0x044f:0xb689`).
-2. **Lecture des axes et boutons 16-bit** : Direction haute précision 65536 pas (16-bit), 3 pédales (Accélérateur, Frein, Embrayage en 10-bit), croix directionnelle D-Pad et 13 boutons d'action.
-3. **Contrôle du retour de force (FFB)** : Réglage matériel de l'angle de braquage (140° à 1080°), du gain global et du ressort de rappel (autocentrage matériel).
-4. **Sans extension noyau (No kext / No Dext)** : Fonctionne à 100% en espace utilisateur, sans droit root requis, sans désactiver SIP (System Integrity Protection).
+> **Statut du projet : 100% Fonctionnel & Opérationnel.**  
+> Pont local en espace utilisateur (User-Space IOKit) permettant d'utiliser le volant **Thrustmaster TS-PC Racer** avec toutes ses fonctionnalités (direction 16-bit, pédales, boutons, palettes et **Retour de Force / FFB**) dans l'application native **NVIDIA GeForce NOW** sous macOS, sans extension noyau ni désactivation du SIP.
 
 ---
 
-## Contenu du projet
+## 🚀 Fonctionnalités Principales
 
-* **`TS-PC Control.app`** : Application graphique macOS native (SwiftUI) avec tableau de bord en temps réel.
-* **`tspc-cli`** : Utilitaire en ligne de commande pour les scripts et l'automatisation.
-* **`com.thrustmaster.tspc.plist`** : Service optionnel en arrière-plan pour auto-débloquer le volant à chaque branchement.
+1. **Émulation Native Logitech G29 dans GeForce NOW** :
+   * Grâce à une bibliothèque d'interposition dynamique (`libTSPCG29Bridge.dylib`), GeForce NOW reconnaît directement votre TS-PC Racer comme un authentique volant **Logitech G29 Driving Force Racing Wheel**.
+   * Les jeux de course cloud (**Forza Horizon 5, F1 24, Assetto Corsa, EA WRC, Dirt Rally...**) détectent un vrai volant au lieu d'une manette basique.
 
----
+2. **Retour de Force Dynamique (FFB) Opérationnel** :
+   * Les effets de retour de force envoyés par les serveurs distants de GeForce NOW (vibrations de vibreurs, dérapages, perte d'adhérence, résistance de direction) sont interceptés, traduits et transmis en temps réel au moteur brushless haute puissance du TS-PC Racer.
+   * Multiplicateur de gain FFB ajustable en direct dans l'interface (1.5x recommandé).
 
-## 1. Lancer l'application graphique (GUI)
+3. **Synchronisation Braquage 1:1 Parfaite (Forza & Simulations)** :
+   * Correction géométrique intégrée (`steering_ratio = 0.50`) : 45° de rotation physique correspondent exactement à 45° dans le cockpit virtuel. Fini l'effet de sur-braquage ou de décalage angulaire.
 
-Vous pouvez lancer l'application directement depuis le Terminal :
-```bash
-open "TS-PC Control.app"
-```
-Ou en double-cliquant sur `TS-PC Control.app` dans le Finder.
+4. **Déblocage USB Automatique (No Kext / No Dext / SIP Actif)** :
+   * À la connexion, le volant s'initialise en mode bootloader générique (`0x044f:0xb65d`). **TS2GFN** lui transmet automatiquement la séquence de contrôle USB constructeur pour l'activer en tant que vrai **TS-PC Racer** haute résolution (`0x044f:0xb689`) à 1080°.
+   * Fonctionne entièrement en espace utilisateur standard, sans aucun droit root, sans kext ni extension DriverKit, et avec **SIP (System Integrity Protection) activé**.
 
-### Fonctionnalités de l'application :
-* **Visualiseur en temps réel** :
-  * Volant rotatif vectoriel qui tourne en direct selon votre angle physique (avec affichage précis des degrés).
-  * Jauges verticales colorées pour l'accélérateur, le frein et l'embrayage.
-  * Témoins lumineux pour les 13 boutons et la croix D-Pad.
-* **Réglages du volant** :
-  * Angle de rotation (140° à 1080°) avec boutons rapides (Kart 360°, Rallye 540°, GT3 900°, Route 1080°).
-  * Gain général du retour de force (0% à 100%).
-  * Force du ressort de rappel (Autocentrage matériel) et interrupteur marche/arrêt.
-* **Tests de diagnostic FFB** :
-  * Impulsion de centrage, traction gauche, traction droite et vibreur.
-* **Guide de compatibilité jeux** :
-  * Profils recommandés et explications pour les jeux natifs Mac et Windows sous Wine/Whisky/CrossOver.
+5. **Interface Graphique Épurée & Aérée (`TS2GFN.app`)** :
+   * Application SwiftUI native en une seule page claire et réactive.
+   * Grand bouton de lancement direct pour GeForce NOW avec vérification automatique de l'environnement.
+   * Curseurs de réglages physiques (Angle 140° à 1080°, Sensibilité 1:1, Puissance FFB, Ressort de centrage, Inversion des pédales).
+   * Modale Télémétrie (`⏱`) : Volant vectoriel animé, jauges de pédalier en direct, matrice de test des boutons GT.
+   * Modale Aide (`?`) : Notice d'utilisation et spécifications techniques.
 
 ---
 
-## 2. Utilitaire en ligne de commande (`tspc-cli`)
+## 📦 Contenu du Répertoire
 
-Pour afficher l'état du volant :
-```bash
-./tspc-cli status
-```
-
-Pour débloquer le volant s'il est en mode démarrage (`0xb65d`) :
-```bash
-./tspc-cli unlock
-```
-
-Pour régler l'angle de braquage (ex: 900°) :
-```bash
-./tspc-cli range 900
-```
-
-Pour régler le ressort de rappel au centre (ex: 60%) :
-```bash
-./tspc-cli autocenter 60
-```
-Pour désactiver le rappel au centre :
-```bash
-./tspc-cli autocenter 0 off
-```
-
-Pour régler le gain FFB global :
-```bash
-./tspc-cli gain 80
-```
-
-Pour lancer le moniteur de télémétrie en direct dans le terminal :
-```bash
-./tspc-cli monitor
-```
-
-Pour exécuter le démon de surveillance continue (auto-déblocage automatique) :
-```bash
-./tspc-cli daemon
-```
+* **`TS2GFN.app`** : Application graphique macOS (SwiftUI / Cocoa).
+* **`libTSPCG29Bridge.dylib`** : Passerelle d'interposition IOKit pour l'émulation Logitech G29 et la traduction FFB.
+* **`Lancer GeForce NOW (Volant).command`** : Script automatisé de lancement avec clone APFS sans perte d'espace disque.
+* **`buttons_mapping.conf`** : Fichier de configuration du mappage des boutons GT, du ratio de braquage et du gain FFB.
+* **`tspc-cli`** : Utilitaire en ligne de commande pour le contrôle matériel, la télémétrie et le déblocage en script.
+* **`gfn-wheel-extension/`** : Extension Chrome de secours pour la version Web (play.geforcenow.com).
 
 ---
 
-## 3. Utilisation avec GeForce NOW & Forza Horizon
+## 🛠️ Installation & Démarrage Rapide
 
-GeForce NOW ne supporte pas nativement les volants Thrustmaster bruts et ne redirige pas les périphériques USB vers ses serveurs distants. Ce projet intègre une **passerelle d'émulation manette Xbox 360 standard 120Hz** :
+### 1. Prérequis
+* Un Mac (Apple Silicon M1/M2/M3/M4 ou processeur Intel) sous macOS 13+.
+* Le volant **Thrustmaster TS-PC Racer** (avec roue GT / Open Wheel ou standard) branché en USB.
+* L'application officielle **GeForce NOW** installée dans `/Applications/GeForceNOW.app`.
 
-### Méthode 1 : Via Google Chrome (Recommandé - 100% Plug & Play)
-1. **Lancer le pilote** :
-   * Ouvrez `TS-PC Control.app` (le serveur local HTTP démarre automatiquement sur le port `8765`), ou lancez `./tspc-cli gfn`.
-   * Dans l'onglet **"GeForce NOW (Forza)"**, sélectionnez le profil **Forza Équilibré (540°)** avec l'autocentrage matériel réglé à **55%**.
-2. **Charger l'extension Chrome (en 30 secondes)** :
-   * Ouvrez Google Chrome à l'adresse `chrome://extensions`.
-   * Activez le **Mode développeur** (en haut à droite).
-   * Cliquez sur **Charger l'extension non empaquetée** et sélectionnez le sous-dossier `gfn-wheel-extension` de ce projet.
-3. **Jouer sur GeForce NOW** :
-   * Rendez-vous sur [https://play.geforcenow.com](https://play.geforcenow.com).
-   * Le badge vert **TS-PC Racer Xbox Bridge** s'affiche en haut à droite.
-   * Lancez **Forza Horizon 5 (ou 6)** : le jeu détecte une manette Xbox officielle.
-   * La direction (axe stick gauche), les pédales (gâchettes LT/RT analogiques) et les palettes (LB/RB) répondent immédiatement !
-
-### Méthode 2 : Via l'application native `GeForceNOW.app`
-Pour l'application Mac native `GeForceNOW.app`, macOS exige une manette enregistrée dans DriverKit (via `OpenJoystickDriver`) ou un adaptateur matériel USB (type Raspberry Pi Pico avec firmware TinyUSB XInput).
-
----
-
-## 4. Compatibilité Jeux Locaux & Émulation
-
-### Jeux natifs macOS (GRID Legends, Dirt Rally, F1 2017...)
-Le TS-PC Racer une fois débloqué en `0xb689` est reconnu nativement par macOS comme un joystick HID standard. Rendez-vous dans les options de commandes du jeu pour calibrer la direction, les pédales et assigner vos boutons.
-
-### Jeux Windows via Wine / CrossOver / Whisky / GPTK
-(Assetto Corsa, BeamNG.drive, iRacing, F1 24, Automobilista 2...)
-* Les jeux reçoivent tous les axes et boutons.
-* L'application TS-PC Control maintient le ressort de rappel matériel et la résistance souhaitée, offrant une excellente sensation de pilotage même sous émulation.
-
----
-
-## 5. Recompiler le projet
-
-Pour recompiler le CLI et l'application :
+### 2. Compilation
+Dans le Terminal, à la racine du projet :
 ```bash
-make clean
 make all
-```
-Pour installer l'application dans `/Applications` :
-```bash
 make install
 ```
+Cette commande compile `tspc-cli`, la dylib d'émulation `libTSPCG29Bridge.dylib`, l'application `TS2GFN.app` et l'installe directement dans votre dossier `/Applications`.
+
+### 3. Utilisation au quotidien
+1. Branchez votre volant **Thrustmaster TS-PC Racer** à votre Mac.
+2. Ouvrez l'application **TS2GFN** depuis votre dossier Applications ou via Spotlight.
+3. Ajustez vos préférences (par exemple 900° ou 1080°, Sensibilité à 0.50, FFB à 1.50x).
+4. Cliquez sur le grand bouton vert **« LANCER GEFORCE NOW »** :
+   * L'application prépare un clone APFS sécurisé (`~/Applications/GeForceNOW-G29.app`) respectant le SIP.
+   * GeForce NOW démarre avec la passerelle G29 injectée.
+5. Lancez votre jeu de course préféré (Forza Horizon 5, F1 24, etc.) : **votre volant et son retour de force fonctionnent immédiatement !**
+
+---
+
+## ⚙️ Configuration Avancée (`buttons_mapping.conf`)
+
+Le fichier `buttons_mapping.conf` permet d'ajuster les correspondances de boutons et l'étalonnage :
+
+```ini
+# Configuration du mappage des boutons Thrustmaster TS-PC Racer -> Logitech G29
+# Volant GT / Open Wheel
+shift_up=2        # Palette droite (Monter vitesse / R1)
+shift_down=1      # Palette gauche (Rétrograder / L1)
+btn_a=6           # Bouton Croix (A)
+btn_b=5           # Bouton Rond (B)
+btn_x=4           # Bouton Carré (X)
+btn_y=3           # Bouton Triangle (Y)
+btn_l2=10         # Gâchette L2
+btn_r2=9          # Gâchette R2
+btn_select=7      # Bouton Select / View
+btn_start=8       # Bouton Start / Menu
+btn_l3=11         # Bouton L3
+btn_r3=12         # Bouton R3
+btn_home=13       # Bouton PlayStation / Home
+
+# Calibration Angle & FFB
+steering_ratio=0.50  # 0.50 = 1:1 parfait dans Forza Horizon 5
+ffb_gain=1.50        # Multiplicateur de puissance FFB Cloud (1.5x recommandé)
+```
+
+---
+
+## 💻 Utilitaire Ligne de Commande (`tspc-cli`)
+
+Pour les utilisateurs avancés ou l'intégration dans des scripts :
+
+* **Vérifier l'état du volant** :
+  ```bash
+  ./tspc-cli status
+  ```
+* **Débloquer le volant (si en bootloader `0xb65d`)** :
+  ```bash
+  ./tspc-cli unlock
+  ```
+* **Régler l'angle de rotation matériel (ex: 900°)** :
+  ```bash
+  ./tspc-cli range 900
+  ```
+* **Régler le rappel au centre (autocentrage matériel)** :
+  ```bash
+  ./tspc-cli autocenter 50
+  ```
+* **Lancer le moniteur de télémétrie en temps réel** :
+  ```bash
+  ./tspc-cli monitor
+  ```
+* **Lancer l'assistant interactif de calibration des boutons** :
+  ```bash
+  ./tspc-cli calibrate-buttons
+  ```
+
+---
+
+## 🛡️ Sécurité & Système (SIP)
+
+* **Aucune extension noyau (Kext)** : Contrairement aux anciens pilotes non signés, TS2GFN utilise exclusivement les API IOKit en espace utilisateur.
+* **SIP Actif** : Le System Integrity Protection de macOS reste activé. Le lanceur crée un clone APFS copy-on-write de l'application GeForce NOW dans `~/Applications/GeForceNOW-G29.app` pour y injecter `libTSPCG29Bridge.dylib` en toute conformité.
+* **Empreinte CPU Minimale** : L'application n'effectue aucun polling lourd de processus ; la détection est gérée en mémoire via les API Cocoa natives.
+
+---
+
+## 📄 Licence
+
+Ce projet est distribué sous licence open source pour la communauté simracing sur macOS.
+Thrustmaster, Logitech, GeForce NOW et Forza Horizon sont des marques déposées de leurs propriétaires respectifs.
