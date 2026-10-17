@@ -48,6 +48,7 @@ if [ ! -d "$CLONE_APP" ] || \
    [ "$ORIG_APP/Contents/MacOS/GeForceNOW" -nt "$CLONE_APP/Contents/MacOS/GeForceNOW" ] || \
    [ "$DYLIB" -nt "$CLONE_APP/Contents/MacOS/GeForceNOW" ] || \
    ! /usr/libexec/PlistBuddy -c "Print :NSMicrophoneUsageDescription" "$CLONE_APP/Contents/Info.plist" >/dev/null 2>&1 || \
+   ! /usr/libexec/PlistBuddy -c "Print :NSMicrophoneUsageDescription" "$CLONE_APP/Contents/Frameworks/GeForceNOW Helper.app/Contents/Info.plist" >/dev/null 2>&1 || \
    ! codesign -d --entitlements - "$CLONE_APP/Contents/MacOS/GeForceNOW" 2>&1 | grep -q "allow-dyld-environment-variables"; then
     NEED_SYNC=1
 fi
@@ -87,6 +88,11 @@ EOF
         "$CLONE_APP/Contents/Info.plist"
         "$CLONE_APP/Contents/MacOS/GeForceNOWStreamer.app/Contents/Info.plist"
         "$CLONE_APP/Contents/MacOS/GeForceNOWContainer.app/Contents/Info.plist"
+        "$CLONE_APP/Contents/Frameworks/GeForceNOW Helper.app/Contents/Info.plist"
+        "$CLONE_APP/Contents/Frameworks/GeForceNOW Helper (GPU).app/Contents/Info.plist"
+        "$CLONE_APP/Contents/Frameworks/GeForceNOW Helper (Renderer).app/Contents/Info.plist"
+        "$CLONE_APP/Contents/Frameworks/GeForceNOW Helper (Plugin).app/Contents/Info.plist"
+        "$CLONE_APP/Contents/Frameworks/GeForceNOW Helper (Alerts).app/Contents/Info.plist"
     )
     for p in "${APP_PLISTS[@]}"; do
         if [ -f "$p" ]; then
@@ -96,6 +102,11 @@ EOF
     done
 
     echo "• Signature locale pour autoriser l'injection et le microphone sous macOS..."
+    codesign --force --entitlements "$ENT_FILE" -s - "$CLONE_APP/Contents/Frameworks/GeForceNOW Helper.app" 2>/dev/null
+    codesign --force --entitlements "$ENT_FILE" -s - "$CLONE_APP/Contents/Frameworks/GeForceNOW Helper (GPU).app" 2>/dev/null
+    codesign --force --entitlements "$ENT_FILE" -s - "$CLONE_APP/Contents/Frameworks/GeForceNOW Helper (Renderer).app" 2>/dev/null
+    codesign --force --entitlements "$ENT_FILE" -s - "$CLONE_APP/Contents/Frameworks/GeForceNOW Helper (Plugin).app" 2>/dev/null
+    codesign --force --entitlements "$ENT_FILE" -s - "$CLONE_APP/Contents/Frameworks/GeForceNOW Helper (Alerts).app" 2>/dev/null
     codesign --force --entitlements "$ENT_FILE" -s - "$CLONE_APP/Contents/MacOS/GeForceNOWStreamer.app" 2>/dev/null
     codesign --force --entitlements "$ENT_FILE" -s - "$CLONE_APP/Contents/MacOS/GeForceNOWContainer.app" 2>/dev/null
     codesign --force --entitlements "$ENT_FILE" -s - "$CLONE_APP/Contents/MacOS/GeForceNOW" 2>/dev/null

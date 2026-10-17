@@ -350,9 +350,14 @@ public class TSPCManager: ObservableObject {
         } else {
             scriptPath = defaultScript
         }
-        let task = Process()
-        task.launchPath = "/bin/bash"
-        task.arguments = [scriptPath]
-        try? task.run()
+        
+        // Exécution détachée via osascript pour que GeForce NOW soit rattaché à launchd (PID 1)
+        // et dispose de sa propre coalition TCC indépendante de TS2GFN
+        let escaped = scriptPath.replacingOccurrences(of: "\"", with: "\\\"")
+        let appleScript = "do shell script \"/bin/bash \\\"\(escaped)\\\" > /dev/null 2>&1 &\""
+        if let script = NSAppleScript(source: appleScript) {
+            var error: NSDictionary?
+            script.executeAndReturnError(&error)
+        }
     }
 }

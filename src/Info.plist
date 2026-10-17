@@ -26,6 +26,10 @@
     <string>13.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>GeForce NOW utilise le microphone pour le chat vocal dans les jeux.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>GeForce NOW utilise la caméra pour le streaming vidéo.</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
 </dict>
