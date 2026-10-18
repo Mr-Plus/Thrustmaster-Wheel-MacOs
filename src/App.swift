@@ -712,11 +712,11 @@ struct HelpModalView: View {
                     HStack(spacing: 6) {
                         Image(systemName: "tuningfork")
                             .foregroundColor(Color(red: 0.95, green: 0.80, blue: 0.35))
-                        Text("3. Réglage Forza Horizon (Synchronisation 1:1)")
+                        Text("3. Réglages recommandés dans Forza Horizon")
                             .font(.system(size: 13, weight: .bold))
                             .foregroundColor(.white)
                     }
-                    Text("Le paramètre « Sensibilité braquage » à 0.50 garantit qu'un tour physique de 45° tourne le cockpit virtuel de 45° exactement. Si vous souhaitez une direction plus vive ou plus progressive, ajustez simplement ce curseur.")
+                    Text("Dans le menu Paramètres > Paramètres Volant / Commandes Avancées du jeu :\n• Échelle de la force de centrage : Mettre à 0 (par défaut le jeu applique un ressort dur à l'arrêt qui disparaît en vitesse).\n• Échelle de l'amortisseur : Mettre à 0.1 ou 0.2 (supprime la résistance pâteuse/lourde à basse allure).\n• Sensibilité braquage : 0.50 (synchronisation 1:1 exacte entre votre volant physique et le cockpit).")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundColor(Color(white: 0.80))
                         .lineSpacing(3)

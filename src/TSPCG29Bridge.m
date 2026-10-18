@@ -566,6 +566,11 @@ CFTypeRef hooked_IOHIDDeviceGetProperty(IOHIDDeviceRef device, CFStringRef key) 
 }
 INTERPOSE(hooked_IOHIDDeviceGetProperty, IOHIDDeviceGetProperty);
 
+static void send_tspc_raw_command(IOHIDDeviceRef dev, const uint8_t *cmd, size_t len);
+static void send_tspc_open_ffb(IOHIDDeviceRef dev);
+static void send_tspc_autocenter(IOHIDDeviceRef dev, int forcePercent, bool enabled);
+static void send_tspc_gain(IOHIDDeviceRef dev, int gainPercent);
+
 // ==============================================================================
 // Hook 3: IOHIDDeviceRegisterInputReportCallback
 // Intercepts input reports and supplies G29 translated reports
@@ -630,6 +635,8 @@ void hooked_IOHIDDeviceRegisterInputReportCallback(IOHIDDeviceRef device, uint8_
             pthread_create(&s_activeBridge->streamThread, NULL, stream_loop, s_activeBridge);
             // Refresh settings from conf file
             load_button_mapping();
+            // Open FFB channels on wheel
+            send_tspc_open_ffb(device);
             // Apply Master Gain
             send_tspc_gain(device, s_btnMap.master_gain);
             // Autocenter Mode: Game (Recommended) vs Wheel
@@ -662,13 +669,24 @@ static void send_tspc_raw_command(IOHIDDeviceRef dev, const uint8_t *cmd, size_t
     IOHIDDeviceSetReport(dev, kIOHIDReportTypeOutput, 0x0a, buf, sizeof(buf));
 }
 
+static void send_tspc_open_ffb(IOHIDDeviceRef dev) {
+    uint8_t op1[2] = { 0x01, 0x04 };
+    send_tspc_raw_command(dev, op1, sizeof(op1));
+    uint8_t op2[2] = { 0x01, 0x05 };
+    send_tspc_raw_command(dev, op2, sizeof(op2));
+}
+
 static void send_tspc_autocenter(IOHIDDeviceRef dev, int forcePercent, bool enabled) {
     if (!enabled || forcePercent <= 0) {
-        // Disable internal centering spring completely (0x08 0x04 0x00 and 0x40 0x04 0x00)
+        // Disable internal centering spring completely (0 magnitude + disabled)
         uint8_t enBuf[4] = { 0x08, 0x04, 0x00, 0x00 };
         send_tspc_raw_command(dev, enBuf, sizeof(enBuf));
+        uint8_t forceBuf[4] = { 0x08, 0x03, 0x00, 0x00 };
+        send_tspc_raw_command(dev, forceBuf, sizeof(forceBuf));
         uint8_t enBuf2[4] = { 0x40, 0x04, 0x00, 0x00 };
         send_tspc_raw_command(dev, enBuf2, sizeof(enBuf2));
+        uint8_t forceBuf2[4] = { 0x40, 0x03, 0x00, 0x00 };
+        send_tspc_raw_command(dev, forceBuf2, sizeof(forceBuf2));
         return;
     }
 
@@ -745,6 +763,15 @@ IOReturn hooked_IOHIDDeviceSetReport(IOHIDDeviceRef device, IOHIDReportType type
             
             // 2. Check for Logitech Force Feedback Command: 0x11 0x08 <force> 0x80 ...
             if (report[offset] == 0x11 || report[offset] == 0x08) {
+                static int s_ffbLogCount = 0;
+                if (++s_ffbLogCount % 300 == 1) {
+                    bridge_log("G29 FFB Packet received from cloud (mode=%s, cmd=0x%02x, sub=0x%02x, f=0x%02x, b3=0x%02x)",
+                               s_btnMap.autocenter_mode == 1 ? "wheel" : "game",
+                               report[offset], report[offset+1],
+                               (reportLength > offset + 2) ? report[offset+2] : 0,
+                               (reportLength > offset + 3) ? report[offset+3] : 0);
+                }
+                
                 if (s_btnMap.autocenter_mode == 1) {
                     // Wheel mode: user specifically requested static wheel centering spring
                     send_tspc_autocenter(device, s_btnMap.autocenter_wheel_force, true);

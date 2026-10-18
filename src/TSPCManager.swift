@@ -371,6 +371,10 @@ public class TSPCManager: ObservableObject {
                 
                 if manager.isBootMode && manager.autoUnlockEnabled {
                     manager.unlock()
+                } else if status.rawValue == 2 {
+                    manager.applyAutocenter()
+                    _ = tspc_set_gain(Int32(manager.masterGain))
+                    _ = tspc_set_rotation_range(UInt16(manager.currentRange))
                 }
             }
         }
@@ -392,6 +396,10 @@ public class TSPCManager: ObservableObject {
             
             if self.isBootMode && self.autoUnlockEnabled {
                 self.unlock()
+            } else if st.rawValue == 2 {
+                self.applyAutocenter()
+                _ = tspc_set_gain(Int32(self.masterGain))
+                _ = tspc_set_rotation_range(UInt16(self.currentRange))
             }
         }
     }

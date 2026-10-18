@@ -392,21 +392,34 @@ int tspc_set_rotation_range(uint16_t degrees) {
 }
 
 int tspc_set_autocenter(int forcePercent, bool enabled) {
-    if (forcePercent < 0) forcePercent = 0;
-    if (forcePercent > 100) forcePercent = 100;
+    if (!enabled || forcePercent <= 0) {
+        // Disable internal centering spring completely (0 magnitude + disabled)
+        uint8_t enBuf[4] = { 0x08, 0x04, 0x00, 0x00 };
+        send_output_report(enBuf, sizeof(enBuf));
+        uint8_t forceBuf[4] = { 0x08, 0x03, 0x00, 0x00 };
+        IOReturn r = send_output_report(forceBuf, sizeof(forceBuf));
+        uint8_t enBuf2[4] = { 0x40, 0x04, 0x00, 0x00 };
+        send_output_report(enBuf2, sizeof(enBuf2));
+        uint8_t forceBuf2[4] = { 0x40, 0x03, 0x00, 0x00 };
+        send_output_report(forceBuf2, sizeof(forceBuf2));
+        return (r == kIOReturnSuccess) ? 0 : -1;
+    }
 
-    // Enable/disable command
-    uint8_t enBuf[4] = { 0x08, 0x04, (uint8_t)(enabled ? 0x01 : 0x00), 0x00 };
+    if (forcePercent > 100) forcePercent = 100;
+    uint16_t mag = (uint16_t)(((uint32_t)forcePercent * 65535) / 100);
+
+    // Enable command
+    uint8_t enBuf[4] = { 0x08, 0x04, 0x01, 0x00 };
     send_output_report(enBuf, sizeof(enBuf));
 
-    // Force command
-    uint8_t forceBuf[4] = { 0x08, 0x03, (uint8_t)(forcePercent & 0xff), (uint8_t)(forcePercent >> 8) };
+    // Force magnitude command (16-bit little endian)
+    uint8_t forceBuf[4] = { 0x08, 0x03, (uint8_t)(mag & 0xff), (uint8_t)(mag >> 8) };
     IOReturn r = send_output_report(forceBuf, sizeof(forceBuf));
 
-    // Also send 0x40 opcodes
-    uint8_t enBuf2[4] = { 0x40, 0x04, (uint8_t)(enabled ? 0x01 : 0x00), 0x00 };
+    // Also send dual-firmware 0x40 opcodes
+    uint8_t enBuf2[4] = { 0x40, 0x04, 0x01, 0x00 };
     send_output_report(enBuf2, sizeof(enBuf2));
-    uint8_t forceBuf2[4] = { 0x40, 0x03, (uint8_t)forcePercent, 0x00 };
+    uint8_t forceBuf2[4] = { 0x40, 0x03, (uint8_t)(mag & 0xff), (uint8_t)(mag >> 8) };
     send_output_report(forceBuf2, sizeof(forceBuf2));
 
     return (r == kIOReturnSuccess) ? 0 : -1;
