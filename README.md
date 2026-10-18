@@ -93,7 +93,19 @@ btn_home=13       # Bouton PlayStation / Home
 
 # Calibration Angle & FFB
 steering_ratio=0.50  # 0.50 = 1:1 parfait dans Forza Horizon 5
-ffb_gain=1.50        # Multiplicateur de puissance FFB Cloud (1.5x recommandé)
+ffb_gain=1.20        # Multiplicateur dynamique FFB Cloud (1.20x recommandé)
+
+# Paramètres Principaux des Forces (Défauts Thrustmaster)
+master_gain=75       # Ajuster l'ensemble des forces (75% défaut constructeur)
+gain_constant=100    # Forces Constantes (100%)
+gain_periodic=100    # Forces Périodiques (100%)
+gain_spring=100      # Forces de Ressort (100%)
+gain_damper=100      # Forces d'Amortisseur (100%)
+boost_enabled=0      # BOOST Constant + Ressort (0=OFF, 1=ON)
+
+# Paramètres de Retour au Centre (game = via le jeu, wheel = via le volant)
+autocenter_mode=game # 'game' coupe le ressort interne matériel pour laisser la physique du jeu piloter le centrage
+autocenter_wheel_force=50 # Force du ressort statique lorsque le mode 'wheel' est actif
 ```
 
 ---

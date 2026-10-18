@@ -30,8 +30,21 @@ public class TSPCManager: ObservableObject {
     @Published public var pressedButtons: Set<Int> = []
     
     // --------------------------------------------------------------------------
-    // Réglages Volant & Retour de Force
+    // Réglages Volant & Retour de Force (Conforme Panneau Officiel Thrustmaster)
     // --------------------------------------------------------------------------
+    public enum AutocenterMode: String, CaseIterable, Identifiable {
+        case game = "game"
+        case wheel = "wheel"
+        
+        public var id: String { rawValue }
+        public var label: String {
+            switch self {
+            case .game: return "via le jeu (Recommandé)"
+            case .wheel: return "via le volant"
+            }
+        }
+    }
+    
     @Published public var currentRange: Double = 1080.0 {
         didSet {
             if currentRange != oldValue {
@@ -40,28 +53,79 @@ public class TSPCManager: ObservableObject {
         }
     }
     
-    @Published public var masterGain: Double = 100.0 {
+    // Paramètres Principaux des Forces (Défaut constructeur : 75%)
+    @Published public var masterGain: Double = 75.0 {
         didSet {
             if masterGain != oldValue {
                 _ = tspc_set_gain(Int32(masterGain))
+                saveConfig()
             }
         }
     }
     
-    @Published public var autocenterForce: Double = 50.0 {
+    // Forces Détaillées
+    @Published public var gainConstant: Double = 100.0 {
+        didSet { if gainConstant != oldValue { saveConfig() } }
+    }
+    @Published public var gainPeriodic: Double = 100.0 {
+        didSet { if gainPeriodic != oldValue { saveConfig() } }
+    }
+    @Published public var gainSpring: Double = 100.0 {
+        didSet { if gainSpring != oldValue { saveConfig() } }
+    }
+    @Published public var gainDamper: Double = 100.0 {
+        didSet { if gainDamper != oldValue { saveConfig() } }
+    }
+    @Published public var boostEnabled: Bool = false {
+        didSet { if boostEnabled != oldValue { saveConfig() } }
+    }
+    
+    // Paramètres de Retour au Centre
+    @Published public var autocenterMode: AutocenterMode = .game {
         didSet {
-            if autocenterForce != oldValue {
-                _ = tspc_set_autocenter(Int32(autocenterForce), autocenterEnabled)
+            if autocenterMode != oldValue {
+                applyAutocenter()
+                saveConfig()
             }
         }
     }
     
-    @Published public var autocenterEnabled: Bool = true {
+    @Published public var autocenterWheelForce: Double = 50.0 {
         didSet {
-            if autocenterEnabled != oldValue {
-                _ = tspc_set_autocenter(Int32(autocenterForce), autocenterEnabled)
+            if autocenterWheelForce != oldValue {
+                if autocenterMode == .wheel {
+                    applyAutocenter()
+                }
+                saveConfig()
             }
         }
+    }
+    
+    public func applyAutocenter() {
+        if autocenterMode == .wheel {
+            _ = tspc_set_autocenter(Int32(autocenterWheelForce), true)
+        } else {
+            // Mode "via le jeu (Recommandé)" : coupe complètement le ressort artificiel interne
+            _ = tspc_set_autocenter(0, false)
+        }
+    }
+    
+    public func resetToThrustmasterDefaults() {
+        masterGain = 75.0
+        gainConstant = 100.0
+        gainPeriodic = 100.0
+        gainSpring = 100.0
+        gainDamper = 100.0
+        boostEnabled = false
+        autocenterMode = .game
+        autocenterWheelForce = 50.0
+        currentRange = 1080.0
+        steeringRatio = 0.50
+        ffbGain = 1.20
+        applyAutocenter()
+        _ = tspc_set_gain(Int32(masterGain))
+        _ = tspc_set_rotation_range(UInt16(currentRange))
+        saveConfig()
     }
     
     @Published public var pedalsInverted: Bool = true {
@@ -77,7 +141,7 @@ public class TSPCManager: ObservableObject {
         }
     }
     
-    @Published public var ffbGain: Double = 1.5 {
+    @Published public var ffbGain: Double = 1.20 {
         didSet {
             saveConfig()
         }
@@ -142,6 +206,21 @@ public class TSPCManager: ObservableObject {
                         if let dVal = Double(valStr) {
                             if key == "steering_ratio" { steeringRatio = dVal }
                             else if key == "ffb_gain" { ffbGain = dVal }
+                            else if key == "master_gain" { masterGain = dVal }
+                            else if key == "gain_constant" { gainConstant = dVal }
+                            else if key == "gain_periodic" { gainPeriodic = dVal }
+                            else if key == "gain_spring" { gainSpring = dVal }
+                            else if key == "gain_damper" { gainDamper = dVal }
+                            else if key == "autocenter_wheel_force" { autocenterWheelForce = dVal }
+                        }
+                        if key == "boost_enabled" {
+                            boostEnabled = (valStr == "1" || valStr.lowercased() == "true")
+                        } else if key == "autocenter_mode" {
+                            if valStr.lowercased() == "wheel" || valStr == "1" {
+                                autocenterMode = .wheel
+                            } else {
+                                autocenterMode = .game
+                            }
                         }
                         if let val = Int(valStr) {
                             switch key {
@@ -189,6 +268,18 @@ public class TSPCManager: ObservableObject {
         # Calibration Angle & FFB
         steering_ratio=\(String(format: "%.2f", steeringRatio))
         ffb_gain=\(String(format: "%.2f", ffbGain))
+
+        # Paramètres Principaux des Forces (Défauts Thrustmaster)
+        master_gain=\(Int(masterGain))
+        gain_constant=\(Int(gainConstant))
+        gain_periodic=\(Int(gainPeriodic))
+        gain_spring=\(Int(gainSpring))
+        gain_damper=\(Int(gainDamper))
+        boost_enabled=\(boostEnabled ? 1 : 0)
+
+        # Paramètres de Retour au Centre (game = via le jeu, wheel = via le volant)
+        autocenter_mode=\(autocenterMode.rawValue)
+        autocenter_wheel_force=\(Int(autocenterWheelForce))
         \n
         """
         let paths = [
@@ -224,6 +315,10 @@ public class TSPCManager: ObservableObject {
         currentRange = (r >= 140 && r <= 1080) ? Double(r) : 1080.0
         pedalsInverted = tspc_get_pedals_inverted()
         loadButtonMapping()
+        
+        // Appliquer immédiatement les forces initiales et le mode de centrage
+        _ = tspc_set_gain(Int32(masterGain))
+        applyAutocenter()
         
         setupCallbacks()
         refreshStatus()

@@ -71,7 +71,7 @@ IOReturn IOHIDDeviceSetReport(IOHIDDeviceRef device, IOHIDReportType type, CFInd
 IOReturn IOHIDDeviceGetReport(IOHIDDeviceRef device, IOHIDReportType type, CFIndex reportID, uint8_t *report, CFIndex *reportLength);
 
 static void send_tspc_raw_command(IOHIDDeviceRef dev, const uint8_t *cmd, size_t len);
-static void send_tspc_autocenter(IOHIDDeviceRef dev, int forcePercent);
+static void send_tspc_autocenter(IOHIDDeviceRef dev, int forcePercent, bool enabled);
 static void send_tspc_range(IOHIDDeviceRef dev, uint16_t degrees);
 static void send_tspc_gain(IOHIDDeviceRef dev, int gainPercent);
 
@@ -146,6 +146,14 @@ typedef struct {
     int btn_home;
     double steering_ratio;
     double ffb_gain;
+    int master_gain;
+    int gain_constant;
+    int gain_periodic;
+    int gain_spring;
+    int gain_damper;
+    int boost_enabled;
+    int autocenter_mode; // 0 = via le jeu (Recommandé), 1 = via le volant
+    int autocenter_wheel_force;
 } TSPCButtonMapping;
 
 static TSPCButtonMapping s_btnMap = {
@@ -163,7 +171,15 @@ static TSPCButtonMapping s_btnMap = {
     .btn_r3 = 12,
     .btn_home = 13,
     .steering_ratio = 0.5,
-    .ffb_gain = 1.5
+    .ffb_gain = 1.2,
+    .master_gain = 75,
+    .gain_constant = 100,
+    .gain_periodic = 100,
+    .gain_spring = 100,
+    .gain_damper = 100,
+    .boost_enabled = 0,
+    .autocenter_mode = 0, // 0 = via le jeu (Recommandé)
+    .autocenter_wheel_force = 50
 };
 
 static void load_button_mapping(void) {
@@ -182,10 +198,10 @@ static void load_button_mapping(void) {
     while (fgets(line, sizeof(line), f)) {
         if (line[0] == '#' || line[0] == '\n') continue;
         char key[64];
-        double fval = 0.0;
-        int val = 0;
-        if (sscanf(line, "%63[^=]=%lf", key, &fval) == 2) {
-            val = (int)fval;
+        char strval[64];
+        if (sscanf(line, "%63[^=]=%63s", key, strval) == 2) {
+            double fval = atof(strval);
+            int val = atoi(strval);
             if (strcmp(key, "shift_up") == 0) s_btnMap.shift_up = val;
             else if (strcmp(key, "shift_down") == 0) s_btnMap.shift_down = val;
             else if (strcmp(key, "btn_a") == 0) s_btnMap.btn_a = val;
@@ -201,13 +217,27 @@ static void load_button_mapping(void) {
             else if (strcmp(key, "btn_home") == 0) s_btnMap.btn_home = val;
             else if (strcmp(key, "steering_ratio") == 0) s_btnMap.steering_ratio = fval;
             else if (strcmp(key, "ffb_gain") == 0) s_btnMap.ffb_gain = fval;
+            else if (strcmp(key, "master_gain") == 0) s_btnMap.master_gain = val;
+            else if (strcmp(key, "gain_constant") == 0) s_btnMap.gain_constant = val;
+            else if (strcmp(key, "gain_periodic") == 0) s_btnMap.gain_periodic = val;
+            else if (strcmp(key, "gain_spring") == 0) s_btnMap.gain_spring = val;
+            else if (strcmp(key, "gain_damper") == 0) s_btnMap.gain_damper = val;
+            else if (strcmp(key, "boost_enabled") == 0) s_btnMap.boost_enabled = val;
+            else if (strcmp(key, "autocenter_wheel_force") == 0) s_btnMap.autocenter_wheel_force = val;
+            else if (strcmp(key, "autocenter_mode") == 0) {
+                if (strcmp(strval, "wheel") == 0 || val == 1) {
+                    s_btnMap.autocenter_mode = 1;
+                } else {
+                    s_btnMap.autocenter_mode = 0; // game
+                }
+            }
         }
     }
     fclose(f);
-    bridge_log("Settings loaded: ratio=%.2f, ffb_gain=%.2f, UP=%d, DOWN=%d, A=%d, B=%d, X=%d, Y=%d",
-               s_btnMap.steering_ratio, s_btnMap.ffb_gain,
-               s_btnMap.shift_up, s_btnMap.shift_down, s_btnMap.btn_a, s_btnMap.btn_b,
-               s_btnMap.btn_x, s_btnMap.btn_y);
+    bridge_log("Settings loaded: ratio=%.2f, ffb_gain=%.2f, master_gain=%d%%, autocenter_mode=%s (%d%%)",
+               s_btnMap.steering_ratio, s_btnMap.ffb_gain, s_btnMap.master_gain,
+               s_btnMap.autocenter_mode == 0 ? "via le jeu (Recommandé)" : "via le volant",
+               s_btnMap.autocenter_wheel_force);
 }
 
 #define IS_BTN(b) ((b) >= 1 && (b) <= 32 && (ctx->buttons & (1 << ((b) - 1))))
@@ -598,9 +628,18 @@ void hooked_IOHIDDeviceRegisterInputReportCallback(IOHIDDeviceRef device, uint8_
         if (callback && !s_activeBridge->streamRunning) {
             s_activeBridge->streamRunning = true;
             pthread_create(&s_activeBridge->streamThread, NULL, stream_loop, s_activeBridge);
-            // Engage hardware FFB motors with 90% gain and 50% initial centering resistance
-            send_tspc_gain(device, 90);
-            send_tspc_autocenter(device, 50);
+            // Refresh settings from conf file
+            load_button_mapping();
+            // Apply Master Gain
+            send_tspc_gain(device, s_btnMap.master_gain);
+            // Autocenter Mode: Game (Recommended) vs Wheel
+            if (s_btnMap.autocenter_mode == 1) {
+                bridge_log("Centering mode: VIA LE VOLANT (%d%%)", s_btnMap.autocenter_wheel_force);
+                send_tspc_autocenter(device, s_btnMap.autocenter_wheel_force, true);
+            } else {
+                bridge_log("Centering mode: VIA LE JEU (Recommandé) -> Internal hardware spring disabled");
+                send_tspc_autocenter(device, 0, false);
+            }
         } else if (!callback && s_activeBridge->streamRunning) {
             s_activeBridge->streamRunning = false;
             pthread_join(s_activeBridge->streamThread, NULL);
@@ -623,8 +662,16 @@ static void send_tspc_raw_command(IOHIDDeviceRef dev, const uint8_t *cmd, size_t
     IOHIDDeviceSetReport(dev, kIOHIDReportTypeOutput, 0x0a, buf, sizeof(buf));
 }
 
-static void send_tspc_autocenter(IOHIDDeviceRef dev, int forcePercent) {
-    if (forcePercent < 0) forcePercent = 0;
+static void send_tspc_autocenter(IOHIDDeviceRef dev, int forcePercent, bool enabled) {
+    if (!enabled || forcePercent <= 0) {
+        // Disable internal centering spring completely (0x08 0x04 0x00 and 0x40 0x04 0x00)
+        uint8_t enBuf[4] = { 0x08, 0x04, 0x00, 0x00 };
+        send_tspc_raw_command(dev, enBuf, sizeof(enBuf));
+        uint8_t enBuf2[4] = { 0x40, 0x04, 0x00, 0x00 };
+        send_tspc_raw_command(dev, enBuf2, sizeof(enBuf2));
+        return;
+    }
+
     if (forcePercent > 100) forcePercent = 100;
 
     // Apply configurable ffb_gain
@@ -635,15 +682,8 @@ static void send_tspc_autocenter(IOHIDDeviceRef dev, int forcePercent) {
     // Scale to full 16-bit unsigned range (0..65535) for Thrustmaster 40W brushless motor controller
     uint16_t mag = (uint16_t)(((uint32_t)eff * 65535) / 100);
 
-    // Ensure wheel base master gain is set to 100%
-    static bool s_gainSet = false;
-    if (!s_gainSet) {
-        s_gainSet = true;
-        send_tspc_gain(dev, 100);
-    }
-
-    // Enable / disable
-    uint8_t enBuf[4] = { 0x08, 0x04, (uint8_t)(eff > 0 ? 0x01 : 0x00), 0x00 };
+    // Enable internal spring
+    uint8_t enBuf[4] = { 0x08, 0x04, 0x01, 0x00 };
     send_tspc_raw_command(dev, enBuf, sizeof(enBuf));
 
     // Force magnitude (16-bit little-endian: 0x0000 to 0xFFFF)
@@ -651,7 +691,7 @@ static void send_tspc_autocenter(IOHIDDeviceRef dev, int forcePercent) {
     send_tspc_raw_command(dev, forceBuf, sizeof(forceBuf));
 
     // 0x40 opcodes for dual-firmware compatibility
-    uint8_t enBuf2[4] = { 0x40, 0x04, (uint8_t)(eff > 0 ? 0x01 : 0x00), 0x00 };
+    uint8_t enBuf2[4] = { 0x40, 0x04, 0x01, 0x00 };
     send_tspc_raw_command(dev, enBuf2, sizeof(enBuf2));
 
     uint8_t forceBuf2[4] = { 0x40, 0x03, (uint8_t)(mag & 0xff), (uint8_t)(mag >> 8) };
@@ -705,22 +745,13 @@ IOReturn hooked_IOHIDDeviceSetReport(IOHIDDeviceRef device, IOHIDReportType type
             
             // 2. Check for Logitech Force Feedback Command: 0x11 0x08 <force> 0x80 ...
             if (report[offset] == 0x11 || report[offset] == 0x08) {
-                uint8_t rawForce = report[offset + 2];
-                // Map raw force byte (0..255) to 0..100%
-                int forcePercent = (rawForce <= 100) ? rawForce : ((int)rawForce * 100 / 255);
-                if (forcePercent < 0) forcePercent = 0;
-                if (forcePercent > 100) forcePercent = 100;
-                
-                static int s_lastFfb = -1;
-                if (forcePercent != s_lastFfb) {
-                    s_lastFfb = forcePercent;
-                    send_tspc_autocenter(device, forcePercent);
-                    
-                    static int s_logCounter = 0;
-                    if (++s_logCounter >= 200) {
-                        s_logCounter = 0;
-                        bridge_log("G29 FFB: Cloud force applied -> %d%% (raw=0x%02X)", forcePercent, rawForce);
-                    }
+                if (s_btnMap.autocenter_mode == 1) {
+                    // Wheel mode: user specifically requested static wheel centering spring
+                    send_tspc_autocenter(device, s_btnMap.autocenter_wheel_force, true);
+                } else {
+                    // Game mode (Recommended): NEVER inject artificial static spring!
+                    // Wheel centering is calculated dynamically by the game physics engine.
+                    send_tspc_autocenter(device, 0, false);
                 }
                 return kIOReturnSuccess;
             }

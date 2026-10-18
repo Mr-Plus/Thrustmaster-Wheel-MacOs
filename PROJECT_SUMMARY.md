@@ -84,7 +84,15 @@ L'application graphique a été entièrement repensée selon un design épuré, 
 
 * **Mise en page 2 colonnes en une seule page :**
   * **Colonne de gauche :** Badge de statut en temps réel et grand bouton de lancement direct pour GeForce NOW.
-  * **Colonne de droite :** Réglages matériels aérés (Angle matériel 140° à 1080° avec presets rapides, Sensibilité braquage 1:1, Puissance FFB Cloud, Ressort de centrage, Inversion des pédales).
+  * **Colonne de droite :** Réglages officiels Thrustmaster conformes au panneau de configuration Windows :
+    * **Paramètres Principaux des Forces :** Ajuster l'ensemble des forces (0% à 100%, défaut constructeur 75%).
+    * **Paramètres de Retour au Centre (Critique) :**
+      * `via le jeu (Recommandé)` : Coupe intégralement le ressort interne matériel du volant (`0x08, 0x04, 0x00`). Le retour au centre est piloté à 100% par la physique dynamique du train avant calculée par le jeu dans GeForce NOW.
+      * `via le volant` : Active le rappel au centre matériel statique du moteur (curseur 0% à 100%, défaut 50%).
+    * **Bouton « Défaut » :** Rétablit instantanément les valeurs d'usine officielles Thrustmaster.
+    * **Angle de rotation matériel :** 140° à 1080° avec 4 presets instantanés (360°, 540°, 900°, 1080°).
+    * **Forces Détaillées (Dépliables) :** Forces Constantes (100%), Forces Périodiques (100%), Forces de Ressort (100%), Forces d'Amortisseur (100%), BOOST (ON/OFF).
+    * **Calibration & Pédales :** Sensibilité braquage 1:1, Puissance FFB Cloud, Inversion des pédales.
 * **Accès contextuel :**
   * Bouton `[ ⏱ ]` : Ouvre la modale de télémétrie complète (volant rotatif vectoriel, barres de niveau des pédales, matrice de diagnostic des boutons).
   * Bouton `[ ? ]` : Ouvre le guide d'utilisation, la documentation et les informations système (*« Passerelle locale IOKit User-Space — Sans kext ni désactivation SIP »* - `TS2GFN v1.0.0`).
