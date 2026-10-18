@@ -304,6 +304,19 @@ public class TSPCManager: ObservableObject {
         }
     }
 
+    public func launchFfbDebugger() {
+        let script = """
+        tell application "Terminal"
+            activate
+            do script "cd '/Users/matthieu.verpillier/Documents/Thrustmaster' && ./tspc-cli debug-ffb"
+        end tell
+        """
+        if let appleScript = NSAppleScript(source: script) {
+            var error: NSDictionary?
+            appleScript.executeAndReturnError(&error)
+        }
+    }
+
     // --------------------------------------------------------------------------
     // Cycle de vie & Initialisation IOKit
     // --------------------------------------------------------------------------

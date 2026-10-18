@@ -130,9 +130,13 @@ Pour les utilisateurs avancés ou l'intégration dans des scripts :
   ```bash
   ./tspc-cli autocenter 50
   ```
-* **Lancer le moniteur de télémétrie en temps réel** :
+* **Lancer le moniteur de télémétrie en temps réel (axes & boutons)** :
   ```bash
   ./tspc-cli monitor
+  ```
+* **Inspecteur FFB en direct (Flux GeForce NOW G29 -> TS-PC Racer)** :
+  ```bash
+  ./tspc-cli debug-ffb
   ```
 * **Lancer l'assistant interactif de calibration des boutons** :
   ```bash

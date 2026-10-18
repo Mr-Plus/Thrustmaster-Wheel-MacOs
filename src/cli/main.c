@@ -3,6 +3,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <signal.h>
+#include <time.h>
 #include <CoreFoundation/CoreFoundation.h>
 #include "../TSPCBridge.h"
 
@@ -170,6 +171,191 @@ static void on_calib_event(const TSPCTelemetry *t, void *ctx) {
     }
 }
 
+static void draw_bipolar_bar(char *out, size_t out_len, float percent, int half_width) {
+    if (percent < -100.0f) percent = -100.0f;
+    if (percent > 100.0f) percent = 100.0f;
+    if (half_width > 30) half_width = 30;
+    char left[32];
+    char right[32];
+    memset(left, ' ', half_width);
+    left[half_width] = '\0';
+    memset(right, ' ', half_width);
+    right[half_width] = '\0';
+
+    if (percent < -0.5f) {
+        int fill = (int)((-percent * half_width) / 100.0f);
+        if (fill > half_width) fill = half_width;
+        for (int i = 0; i < fill; i++) {
+            left[half_width - 1 - i] = '=';
+        }
+    } else if (percent > 0.5f) {
+        int fill = (int)((percent * half_width) / 100.0f);
+        if (fill > half_width) fill = half_width;
+        for (int i = 0; i < fill; i++) {
+            right[i] = '=';
+        }
+    }
+    snprintf(out, out_len, "[%s|%s]", left, right);
+}
+
+static uint64_t cli_time_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
+}
+
+static int run_debug_ffb(void) {
+    signal(SIGINT, sig_handler);
+    signal(SIGTERM, sig_handler);
+
+    // Try listening to wheel telemetry if wheel is connected
+    tspc_start_listening(on_telemetry, on_conn, NULL);
+
+    printf("\033[?25l"); // Hide cursor
+    printf("\033[2J");   // Clear screen
+
+    uint32_t last_seq = 0;
+    uint64_t last_pkt_time = 0;
+    int pkt_rate = 0;
+    int pkt_counter = 0;
+    uint64_t rate_timer = cli_time_ms();
+
+    while (s_running) {
+        TSPCFfbDebugData dbg;
+        bool has_data = tspc_ffb_debug_read(&dbg);
+        TSPCTelemetry telem;
+        tspc_get_telemetry_snapshot(&telem);
+
+        uint64_t now = cli_time_ms();
+        if (now - rate_timer >= 1000) {
+            pkt_rate = pkt_counter;
+            pkt_counter = 0;
+            rate_timer = now;
+        }
+
+        if (has_data && dbg.seq != last_seq) {
+            last_seq = dbg.seq;
+            last_pkt_time = now;
+            pkt_counter++;
+        }
+
+        uint64_t elapsed_ms = (last_pkt_time > 0) ? (now - last_pkt_time) : 999999;
+
+        // Move cursor to top-left
+        printf("\033[H");
+
+        printf("\033[1;36m================================================================================\033[0m\n");
+        printf("\033[1;37m🏎️   TS2GFN FORCE FEEDBACK INSPECTOR : GeForce NOW (G29) -> TS-PC Racer\033[0m\n");
+        printf("\033[1;36m================================================================================\033[0m\n");
+
+        if (!has_data || elapsed_ms > 3000) {
+            printf("État de liaison : \033[1;33m⏳ EN ATTENTE DE GEFORCE NOW\033[0m (Lancez un jeu avec volant)\n");
+            printf("Fichier d'échange: %s\n", TSPC_FFB_DEBUG_FILE);
+            printf("Dernière activité: %s\n\n", (last_pkt_time > 0) ? "Inactif depuis > 3s" : "Aucune trame reçue");
+        } else {
+            printf("État de liaison : \033[1;32m● CONNECTÉ & ACTIF\033[0m  |  Fréquence: \033[1;37m%d Hz\033[0m  |  Latence: \033[1;37m%llu ms\033[0m  |  Trame #\033[1;37m%u\033[0m\n",
+                   pkt_rate, (unsigned long long)elapsed_ms, dbg.seq);
+            printf("Configuration   : Gain FFB: \033[1;33m%.2fx\033[0m  |  Sens: \033[1;33m%s\033[0m  |  Centrage: \033[1;33m%s\033[0m\n\n",
+                   dbg.ffb_gain, dbg.ffb_invert ? "INVERSÉ" : "Standard",
+                   dbg.autocenter_mode == 0 ? "Jeu (Physique Directe)" : "Volant (Ressort Matériel)");
+        }
+
+        // Section 1: G29 Cloud Input
+        printf("\033[1;34m[1] SIGNAUX ENVOYÉS PAR LE JEU DANS GEFORCE NOW (Protocole Logitech G29)\033[0m\n");
+        if (has_data) {
+            float g29_pct = ((float)dbg.g29_delta * 100.0f) / 127.0f;
+            char g29_bar[64];
+            draw_bipolar_bar(g29_bar, sizeof(g29_bar), g29_pct, 15);
+
+            const char *dir_str = "Point Neutre (0 Couple)";
+            if (dbg.g29_delta > 0) dir_str = "Couple Droite (Sens Horaire)";
+            else if (dbg.g29_delta < 0) dir_str = "Couple Gauche (Sens Anti-horaire)";
+
+            printf("  • Commande reçue : \033[1;37m%s\033[0m (Opcode: 0x%02X)\n", dbg.g29_desc, dbg.g29_cmd_type);
+            printf("  • Valeur brute   : \033[1;37m0x%02X\033[0m (%u / 255)  |  Centre neutre G29 = 0x80 (128)\n",
+                   dbg.g29_raw_force, dbg.g29_raw_force);
+            printf("  • Delta physique : \033[1;%sm%+d\033[0m sur plage [-128..+127]  ->  %s\n",
+                   dbg.g29_delta == 0 ? "32" : (dbg.g29_delta > 0 ? "33" : "35"),
+                   dbg.g29_delta, dir_str);
+            printf("  • Jauge Cloud    : \033[1;32m%s\033[0m  \033[1;37m%+6.1f%%\033[0m\n\n", g29_bar, g29_pct);
+        } else {
+            printf("  (Aucune trame reçue pour le moment)\n\n");
+        }
+
+        // Section 2: Thrustmaster TS-PC Output
+        printf("\033[1;32m[2] TRADUCTION & ORDRES ENVOYÉS AU VOLANT THRUSTMASTER TS-PC RACER\033[0m\n");
+        if (has_data) {
+            char tspc_bar[64];
+            draw_bipolar_bar(tspc_bar, sizeof(tspc_bar), dbg.tspc_percent, 15);
+
+            printf("  • Couple Moteur  : \033[1;%sm%+d\033[0m / 16384  (Format Natif Constant Force 16-bit)\n",
+                   dbg.tspc_level == 0 ? "32" : "33", dbg.tspc_level);
+            printf("  • Puissance Base : \033[1;32m%s\033[0m  \033[1;37m%+6.1f%%\033[0m du moteur brushless 40W\n",
+                   tspc_bar, dbg.tspc_percent);
+
+            printf("  • Trame USB HID  : \033[1;36m");
+            for (uint32_t i = 0; i < dbg.tspc_packet_len && i < 19; i++) {
+                printf("%02X ", dbg.tspc_packet[i]);
+            }
+            if (dbg.tspc_packet_len == 0) printf("(Désactivé)");
+            printf("\033[0m\n\n");
+        } else {
+            printf("  (En attente de commandes du moteur)\n\n");
+        }
+
+        // Section 3: Wheel physical telemetry
+        printf("\033[1;35m[3] POSITION PHYSIQUE DU VOLANT TS-PC EN DIRECT\033[0m\n");
+        if (telem.isConnected) {
+            float angle_pct = (telem.wheelAngleDeg / (dbg.wheel_range > 0 ? (dbg.wheel_range / 2.0f) : 450.0f)) * 100.0f;
+            char angle_bar[64];
+            draw_bipolar_bar(angle_bar, sizeof(angle_bar), angle_pct, 15);
+
+            printf("  • Angle Actuel   : \033[1;37m%+6.1f°\033[0m (Plage active: %u°)  %s\n",
+                   telem.wheelAngleDeg, dbg.wheel_range > 0 ? dbg.wheel_range : 900, angle_bar);
+            printf("  • Capteur Optique: Raw = %u (Centre neutre ~32768)\n\n", telem.wheelRaw);
+        } else {
+            printf("  • Volant : \033[1;31mNon détecté sur le port USB\033[0m (Vérifiez le câble ou lancez 'unlock')\n\n");
+        }
+
+        // Section 4: History Table
+        printf("\033[1;33m[4] HISTORIQUE DES DERNIÈRES COMMANDES FFB REÇUES\033[0m\n");
+        printf("  HEURE        | G29 RAW | DELTA | TS-PC 16B | PUISSANCE | DESCRIPTION\n");
+        printf("  -------------+---------+-------+-----------+-----------+------------------------------\n");
+
+        if (has_data && dbg.history_count > 0) {
+            uint32_t count = dbg.history_count;
+            if (count > 8) count = 8;
+            for (uint32_t i = 0; i < count; i++) {
+                int idx = (int)dbg.history_head - 1 - (int)i;
+                if (idx < 0) idx += 16;
+                const TSPCFfbHistoryItem *item = &dbg.history[idx];
+
+                time_t sec = (time_t)(item->timestamp_ms / 1000ULL);
+                int ms = (int)(item->timestamp_ms % 1000ULL);
+                struct tm tm_buf;
+                localtime_r(&sec, &tm_buf);
+
+                float pct = ((float)item->tspc_level * 100.0f) / 16384.0f;
+                printf("  %02d:%02d:%02d.%03d | 0x%02X    | %+5d | %+9d | %+8.1f%% | %-28.28s\n",
+                       tm_buf.tm_hour, tm_buf.tm_min, tm_buf.tm_sec, ms,
+                       item->g29_raw, item->g29_delta, item->tspc_level, pct, item->note);
+            }
+        } else {
+            printf("  (Aucune trame dans l'historique)\n");
+        }
+
+        printf("\n\033[1;30mAppuyez sur Ctrl+C pour quitter l'inspecteur.\033[0m\n");
+        fflush(stdout);
+
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.04, false);
+    }
+
+    printf("\033[?25h\n"); // Restore cursor
+    tspc_stop_listening();
+    printf("Arrêt de l'inspecteur FFB.\n");
+    return 0;
+}
+
 static void print_usage(const char *prog) {
     printf("Thrustmaster TS-PC Racer macOS CLI Tool\n");
     printf("Usage:\n");
@@ -179,6 +365,7 @@ static void print_usage(const char *prog) {
     printf("  %s autocenter <0-100> [off]  Régler la force du ressort de rappel\n", prog);
     printf("  %s gain <0-100>              Régler le gain matériel FFB\n", prog);
     printf("  %s test <left|right|rumble>  Tester un effet de retour de force\n", prog);
+    printf("  %s debug-ffb                 Inspecteur FFB en direct (Flux GeForce NOW G29 -> TS-PC)\n", prog);
     printf("  %s calibrate-buttons         Assistant pas-à-pas pour calibrer chaque touche physique\n", prog);
     printf("  %s test-buttons              Tester et valider chaque bouton du volant en direct\n", prog);
     printf("  %s monitor                   Moniteur interactif en direct des axes et boutons\n", prog);
@@ -194,6 +381,10 @@ int main(int argc, char **argv) {
 
     const char *cmd = argv[1];
     tspc_init();
+
+    if (strcmp(cmd, "debug-ffb") == 0 || strcmp(cmd, "ffb") == 0 || strcmp(cmd, "inspector") == 0) {
+        return run_debug_ffb();
+    }
 
     if (strcmp(cmd, "status") == 0) {
         char desc[256];

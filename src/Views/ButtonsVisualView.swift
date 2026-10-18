@@ -33,6 +33,24 @@ struct ButtonsVisualView: View {
                 .buttonStyle(PlainButtonStyle())
                 
                 Button(action: {
+                    manager.launchFfbDebugger()
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "gauge.with.dots.needle.bottom.50percent")
+                            .font(.system(size: 10, weight: .bold))
+                        Text("Moniteur FFB")
+                            .font(.system(size: 11, weight: .bold))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color(red: 0.12, green: 0.55, blue: 0.35))
+                    .cornerRadius(6)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .help("Ouvrir l'inspecteur télémétrique FFB en direct (GeForce NOW -> TS-PC)")
+
+                Button(action: {
                     manager.loadButtonMapping()
                 }) {
                     Image(systemName: "arrow.clockwise")

@@ -779,6 +779,60 @@ static void send_tspc_init_ffb(IOHIDDeviceRef dev) {
     bridge_log("TS-PC FFB Engine initialized: Hardware spring disabled, Constant Force slot ready.");
 }
 
+static TSPCFfbDebugData s_ffbDebug = { .magic = TSPC_FFB_DEBUG_MAGIC };
+static pthread_mutex_t s_ffbDebugLock = PTHREAD_MUTEX_INITIALIZER;
+
+static uint64_t current_time_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
+}
+
+static void update_ffb_debug_telemetry(uint8_t cmd_type, uint8_t raw_force, int16_t delta,
+                                      int16_t tspc_level, const char *desc,
+                                      const uint8_t *packet, size_t packet_len) {
+    pthread_mutex_lock(&s_ffbDebugLock);
+    uint64_t now = current_time_ms();
+    s_ffbDebug.magic = TSPC_FFB_DEBUG_MAGIC;
+    s_ffbDebug.seq++;
+    s_ffbDebug.timestamp_ms = now;
+    s_ffbDebug.g29_cmd_type = cmd_type;
+    s_ffbDebug.g29_raw_force = raw_force;
+    s_ffbDebug.g29_delta = delta;
+    if (desc) {
+        snprintf(s_ffbDebug.g29_desc, sizeof(s_ffbDebug.g29_desc), "%s", desc);
+    }
+    s_ffbDebug.tspc_level = tspc_level;
+    s_ffbDebug.tspc_percent = ((float)tspc_level * 100.0f) / 16384.0f;
+    s_ffbDebug.tspc_packet_len = (packet && packet_len > 0) ?
+        (packet_len < sizeof(s_ffbDebug.tspc_packet) ? (uint32_t)packet_len : sizeof(s_ffbDebug.tspc_packet)) : 0;
+    if (packet && s_ffbDebug.tspc_packet_len > 0) {
+        memcpy(s_ffbDebug.tspc_packet, packet, s_ffbDebug.tspc_packet_len);
+    }
+    s_ffbDebug.ffb_gain = (float)s_btnMap.ffb_gain;
+    s_ffbDebug.ffb_invert = s_btnMap.ffb_invert;
+    s_ffbDebug.autocenter_mode = s_btnMap.autocenter_mode;
+    s_ffbDebug.master_gain = s_btnMap.master_gain;
+    s_ffbDebug.wheel_range = tspc_get_current_range();
+
+    // Add to rolling history ring buffer
+    uint32_t idx = s_ffbDebug.history_head;
+    s_ffbDebug.history[idx].timestamp_ms = now;
+    s_ffbDebug.history[idx].g29_raw = raw_force;
+    s_ffbDebug.history[idx].g29_delta = delta;
+    s_ffbDebug.history[idx].tspc_level = tspc_level;
+    if (desc) {
+        snprintf(s_ffbDebug.history[idx].note, sizeof(s_ffbDebug.history[idx].note), "%s", desc);
+    }
+    s_ffbDebug.history_head = (idx + 1) % 16;
+    if (s_ffbDebug.history_count < 16) {
+        s_ffbDebug.history_count++;
+    }
+
+    tspc_ffb_debug_update(&s_ffbDebug);
+    pthread_mutex_unlock(&s_ffbDebugLock);
+}
+
 static void send_tspc_constant_force(IOHIDDeviceRef dev, int16_t level) {
     if (!dev) return;
 
@@ -841,12 +895,16 @@ IOReturn hooked_IOHIDDeviceSetReport(IOHIDDeviceRef device, IOHIDReportType type
                 bridge_log("G29 Output: Wheel Range set to %u° from cloud! Applying to TS-PC...", deg);
                 send_tspc_range(device, deg);
                 tspc_set_rotation_range(deg);
+                char rDesc[48];
+                snprintf(rDesc, sizeof(rDesc), "Angle de rotation : %u°", deg);
+                update_ffb_debug_telemetry(0xf8, 0, (int16_t)deg, 0, rDesc, NULL, 0);
                 return kIOReturnSuccess;
             }
 
             // 2. Check for Logitech Deactivate Force Effect: 0x13
             if ((reportLength >= offset + 1) && report[offset] == 0x13) {
                 send_tspc_constant_force(device, 0);
+                update_ffb_debug_telemetry(0x13, 0x80, 0, 0, "Slot Désactivé (0 Couple)", NULL, 0);
                 return kIOReturnSuccess;
             }
             
@@ -862,6 +920,8 @@ IOReturn hooked_IOHIDDeviceSetReport(IOHIDDeviceRef device, IOHIDReportType type
                 if (s_btnMap.autocenter_mode == 1) {
                     // Wheel mode: static user-configured return-to-center spring
                     send_tspc_autocenter(device, s_btnMap.autocenter_wheel_force, true);
+                    update_ffb_debug_telemetry(report[offset], rawForce, (int)rawForce - 128, 0,
+                                              "Ressort Matériel Volant", NULL, 0);
                 } else {
                     // Game mode (Recommended): Continuous torque directly driven by game physics!
                     // Logitech protocol: 128 (0x80) is neutral / point zero (0 torque: stopped car, straight line).
@@ -886,6 +946,18 @@ IOReturn hooked_IOHIDDeviceSetReport(IOHIDDeviceRef device, IOHIDReportType type
                         s_lastLevel = level;
                         send_tspc_constant_force(device, level);
                     }
+
+                    char ffbDesc[48];
+                    if (g29_force == 0) {
+                        snprintf(ffbDesc, sizeof(ffbDesc), "Point Zéro (0 Couple)");
+                    } else if (g29_force > 0) {
+                        snprintf(ffbDesc, sizeof(ffbDesc), "Braquage Droite (Raw 0x%02X)", rawForce);
+                    } else {
+                        snprintf(ffbDesc, sizeof(ffbDesc), "Braquage Gauche (Raw 0x%02X)", rawForce);
+                    }
+                    uint8_t mod_pkt[19] = { 0x00, 0x01, 0x6a, (uint8_t)(level & 0xff), (uint8_t)((level >> 8) & 0xff),
+                                            0,0,0,0,0,0,0,0, 0x00, 0x45, 0xff, 0xff, 0x00, 0x00 };
+                    update_ffb_debug_telemetry(report[offset], rawForce, g29_force, level, ffbDesc, mod_pkt, sizeof(mod_pkt));
                     
                     static int s_ffbLogCount = 0;
                     if (++s_ffbLogCount % 150 == 1) {

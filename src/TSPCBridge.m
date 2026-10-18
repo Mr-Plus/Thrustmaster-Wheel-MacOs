@@ -10,6 +10,7 @@
 #import <netinet/in.h>
 #import <arpa/inet.h>
 #import <unistd.h>
+#import <fcntl.h>
 
 #import "TSPCBridge.h"
 
@@ -602,5 +603,32 @@ void tspc_stop_http_server(void) {
 
 bool tspc_is_http_server_running(void) {
     return s_httpRunning;
+}
+
+// ==============================================================================
+// Live FFB Debugger Telemetry Helpers
+// ==============================================================================
+static int s_ffbDebugFd = -1;
+
+void tspc_ffb_debug_update(const TSPCFfbDebugData *data) {
+    if (!data) return;
+    if (s_ffbDebugFd < 0) {
+        s_ffbDebugFd = open(TSPC_FFB_DEBUG_FILE, O_RDWR | O_CREAT, 0666);
+    }
+    if (s_ffbDebugFd >= 0) {
+        pwrite(s_ffbDebugFd, data, sizeof(TSPCFfbDebugData), 0);
+    }
+}
+
+bool tspc_ffb_debug_read(TSPCFfbDebugData *outData) {
+    if (!outData) return false;
+    int fd = open(TSPC_FFB_DEBUG_FILE, O_RDONLY);
+    if (fd < 0) return false;
+    ssize_t n = pread(fd, outData, sizeof(TSPCFfbDebugData), 0);
+    close(fd);
+    if (n == (ssize_t)sizeof(TSPCFfbDebugData) && outData->magic == TSPC_FFB_DEBUG_MAGIC) {
+        return true;
+    }
+    return false;
 }
 

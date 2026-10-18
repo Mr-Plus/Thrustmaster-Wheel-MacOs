@@ -71,6 +71,53 @@ void tspc_stop_http_server(void);
 bool tspc_is_http_server_running(void);
 void tspc_get_telemetry_snapshot(TSPCTelemetry *outTelem);
 
+// ==============================================================================
+// Live FFB Debugger Telemetry (GeForce NOW -> G29 -> TS-PC Racer)
+// ==============================================================================
+#define TSPC_FFB_DEBUG_FILE "/tmp/tspc_ffb_debug.dat"
+#define TSPC_FFB_DEBUG_MAGIC 0x54534642 // 'TSFB'
+
+typedef struct {
+    uint64_t timestamp_ms;
+    uint8_t g29_raw;
+    int16_t g29_delta;
+    int16_t tspc_level;
+    char note[48];
+} TSPCFfbHistoryItem;
+
+typedef struct {
+    uint32_t magic;
+    uint32_t seq;
+    uint64_t timestamp_ms;
+    
+    // G29 Input from Cloud
+    uint8_t g29_cmd_type;
+    uint8_t g29_raw_force;
+    int16_t g29_delta;
+    char g29_desc[48];
+    
+    // TS-PC Translation to Base
+    int16_t tspc_level;
+    float tspc_percent;
+    uint8_t tspc_packet[24];
+    uint32_t tspc_packet_len;
+    
+    // Active Settings
+    float ffb_gain;
+    int ffb_invert;
+    int autocenter_mode;
+    int master_gain;
+    uint16_t wheel_range;
+    
+    // History ring
+    TSPCFfbHistoryItem history[16];
+    uint32_t history_head;
+    uint32_t history_count;
+} TSPCFfbDebugData;
+
+void tspc_ffb_debug_update(const TSPCFfbDebugData *data);
+bool tspc_ffb_debug_read(TSPCFfbDebugData *outData);
+
 #ifdef __cplusplus
 }
 #endif
