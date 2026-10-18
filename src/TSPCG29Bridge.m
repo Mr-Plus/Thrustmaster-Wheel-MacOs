@@ -762,23 +762,46 @@ IOReturn hooked_IOHIDDeviceSetReport(IOHIDDeviceRef device, IOHIDReportType type
             }
             
             // 2. Check for Logitech Force Feedback Command: 0x11 0x08 <force> 0x80 ...
-            if (report[offset] == 0x11 || report[offset] == 0x08) {
-                static int s_ffbLogCount = 0;
-                if (++s_ffbLogCount % 300 == 1) {
-                    bridge_log("G29 FFB Packet received from cloud (mode=%s, cmd=0x%02x, sub=0x%02x, f=0x%02x, b3=0x%02x)",
-                               s_btnMap.autocenter_mode == 1 ? "wheel" : "game",
-                               report[offset], report[offset+1],
-                               (reportLength > offset + 2) ? report[offset+2] : 0,
-                               (reportLength > offset + 3) ? report[offset+3] : 0);
+            if ((reportLength >= offset + 2) && (report[offset] == 0x11 || report[offset] == 0x08)) {
+                uint8_t rawForce = 0x80;
+                if (report[offset] == 0x11 && reportLength >= offset + 3) {
+                    rawForce = report[offset + 2];
+                } else if (report[offset] == 0x08 && reportLength >= offset + 2) {
+                    rawForce = report[offset + 1];
                 }
                 
+                int forcePercent = 0;
                 if (s_btnMap.autocenter_mode == 1) {
-                    // Wheel mode: user specifically requested static wheel centering spring
-                    send_tspc_autocenter(device, s_btnMap.autocenter_wheel_force, true);
+                    // Wheel mode: static user-configured return-to-center spring
+                    forcePercent = s_btnMap.autocenter_wheel_force;
                 } else {
-                    // Game mode (Recommended): NEVER inject artificial static spring!
-                    // Wheel centering is calculated dynamically by the game physics engine.
-                    send_tspc_autocenter(device, 0, false);
+                    // Game mode (Recommended): dynamic FFB from game physics!
+                    // In Logitech G29 protocol:
+                    // 0x80 (128) is neutral center (0 torque: stopped car, straight line).
+                    // Deviation from 128 is the dynamic aligning torque from game physics.
+                    int diff = abs((int)rawForce - 128);
+                    if (diff <= 3) {
+                        diff = 0; // Deadband around center
+                    }
+                    forcePercent = (diff * 100) / 127;
+                    if (forcePercent > 100) forcePercent = 100;
+                }
+                
+                static int s_lastFfb = -1;
+                if (forcePercent != s_lastFfb) {
+                    s_lastFfb = forcePercent;
+                    if (forcePercent <= 0) {
+                        send_tspc_autocenter(device, 0, false);
+                    } else {
+                        send_tspc_autocenter(device, forcePercent, true);
+                    }
+                }
+                
+                static int s_ffbLogCount = 0;
+                if (++s_ffbLogCount % 150 == 1) {
+                    bridge_log("G29 FFB: Cloud raw=0x%02X (diff=%d) -> Applied to TS-PC=%d%% (mode=%s)",
+                               rawForce, abs((int)rawForce - 128), forcePercent,
+                               s_btnMap.autocenter_mode == 1 ? "wheel" : "game");
                 }
                 return kIOReturnSuccess;
             }
