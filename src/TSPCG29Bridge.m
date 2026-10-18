@@ -172,7 +172,7 @@ static TSPCButtonMapping s_btnMap = {
     .btn_l3 = 11,
     .btn_r3 = 12,
     .btn_home = 13,
-    .steering_ratio = 0.5,
+    .steering_ratio = 1.0,
     .ffb_gain = 1.0,
     .master_gain = 75,
     .gain_constant = 100,
@@ -572,10 +572,9 @@ INTERPOSE(hooked_IOHIDDeviceGetProperty, IOHIDDeviceGetProperty);
 
 static void send_tspc_raw_command(IOHIDDeviceRef dev, const uint8_t *cmd, size_t len);
 static void send_tspc_open_ffb(IOHIDDeviceRef dev);
-static void send_tspc_autocenter(IOHIDDeviceRef dev, int forcePercent, bool enabled);
+static void send_tspc_spring_enable(IOHIDDeviceRef dev, bool enable);
+static void send_tspc_spring_magnitude(IOHIDDeviceRef dev, uint16_t magnitude);
 static void send_tspc_gain(IOHIDDeviceRef dev, int gainPercent);
-static void send_tspc_init_ffb(IOHIDDeviceRef dev);
-static void send_tspc_constant_force(IOHIDDeviceRef dev, int16_t level);
 
 // ==============================================================================
 // Hook 3: IOHIDDeviceRegisterInputReportCallback
@@ -645,13 +644,17 @@ void hooked_IOHIDDeviceRegisterInputReportCallback(IOHIDDeviceRef device, uint8_
             send_tspc_open_ffb(device);
             // Apply Master Gain
             send_tspc_gain(device, s_btnMap.master_gain);
+            // Enable spring motor channel ONCE (never toggle during driving to avoid clicks and à-coups)
+            send_tspc_spring_enable(device, true);
+
             // Autocenter Mode: Game (Recommended) vs Wheel
             if (s_btnMap.autocenter_mode == 1) {
-                bridge_log("Centering mode: VIA LE VOLANT (%d%%)", s_btnMap.autocenter_wheel_force);
-                send_tspc_autocenter(device, s_btnMap.autocenter_wheel_force, true);
+                uint16_t mag = (uint16_t)(((uint32_t)s_btnMap.autocenter_wheel_force * 65535) / 100);
+                bridge_log("Centering mode: VIA LE VOLANT (%d%%, mag=%u)", s_btnMap.autocenter_wheel_force, mag);
+                send_tspc_spring_magnitude(device, mag);
             } else {
-                bridge_log("Centering mode: VIA LE JEU (Recommandé) -> Initializing FFB physics engine");
-                send_tspc_init_ffb(device);
+                bridge_log("Centering mode: VIA LE JEU (Recommandé) -> Dynamic FFB ready (0 initial torque at standstill)");
+                send_tspc_spring_magnitude(device, 0);
             }
         } else if (!callback && s_activeBridge->streamRunning) {
             s_activeBridge->streamRunning = false;
@@ -670,9 +673,12 @@ static IOHIDDeviceSetReportFunc s_real_IOHIDDeviceSetReport = NULL;
 
 static void ensure_iokit_symbols(void) {
     if (!s_real_IOHIDDeviceSetReport) {
-        void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
-        if (iokit) {
-            s_real_IOHIDDeviceSetReport = (IOHIDDeviceSetReportFunc)dlsym(iokit, "IOHIDDeviceSetReport");
+        s_real_IOHIDDeviceSetReport = (IOHIDDeviceSetReportFunc)dlsym(RTLD_NEXT, "IOHIDDeviceSetReport");
+        if (!s_real_IOHIDDeviceSetReport) {
+            void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
+            if (iokit) {
+                s_real_IOHIDDeviceSetReport = (IOHIDDeviceSetReportFunc)dlsym(iokit, "IOHIDDeviceSetReport");
+            }
         }
     }
 }
@@ -684,15 +690,16 @@ static void send_tspc_raw_command(IOHIDDeviceRef dev, const uint8_t *cmd, size_t
     memset(buf, 0, sizeof(buf));
     size_t copyLen = len < sizeof(buf) ? len : sizeof(buf);
     memcpy(buf, cmd, copyLen);
-    if (s_real_IOHIDDeviceSetReport) {
-        IOReturn r = s_real_IOHIDDeviceSetReport(dev, kIOHIDReportTypeOutput, 0, buf, sizeof(buf));
-        if (r != kIOReturnSuccess) {
-            s_real_IOHIDDeviceSetReport(dev, kIOHIDReportTypeOutput, 0x0a, buf, sizeof(buf));
-        }
-    } else {
-        IOReturn r = IOHIDDeviceSetReport(dev, kIOHIDReportTypeOutput, 0, buf, sizeof(buf));
-        if (r != kIOReturnSuccess) {
-            IOHIDDeviceSetReport(dev, kIOHIDReportTypeOutput, 0x0a, buf, sizeof(buf));
+
+    IOHIDDeviceSetReportFunc fn = s_real_IOHIDDeviceSetReport ? s_real_IOHIDDeviceSetReport : IOHIDDeviceSetReport;
+    IOReturn r = fn(dev, kIOHIDReportTypeOutput, 0, buf, sizeof(buf));
+    if (r != kIOReturnSuccess) {
+        r = fn(dev, kIOHIDReportTypeOutput, 0x0a, buf, sizeof(buf));
+    }
+    if (r != kIOReturnSuccess) {
+        static int s_errCount = 0;
+        if (++s_errCount % 100 == 1) {
+            bridge_log("send_tspc_raw_command error: 0x%08x (cmd=0x%02x 0x%02x)", r, cmd[0], len > 1 ? cmd[1] : 0);
         }
     }
 }
@@ -704,79 +711,22 @@ static void send_tspc_open_ffb(IOHIDDeviceRef dev) {
     send_tspc_raw_command(dev, op2, sizeof(op2));
 }
 
-static void send_tspc_autocenter(IOHIDDeviceRef dev, int forcePercent, bool enabled) {
-    if (!enabled || forcePercent <= 0) {
-        // Disable internal centering spring completely (0 magnitude + disabled)
-        uint8_t enBuf[4] = { 0x08, 0x04, 0x00, 0x00 };
-        send_tspc_raw_command(dev, enBuf, sizeof(enBuf));
-        uint8_t forceBuf[4] = { 0x08, 0x03, 0x00, 0x00 };
-        send_tspc_raw_command(dev, forceBuf, sizeof(forceBuf));
-        uint8_t enBuf2[4] = { 0x40, 0x04, 0x00, 0x00 };
-        send_tspc_raw_command(dev, enBuf2, sizeof(enBuf2));
-        uint8_t forceBuf2[4] = { 0x40, 0x03, 0x00, 0x00 };
-        send_tspc_raw_command(dev, forceBuf2, sizeof(forceBuf2));
-        return;
-    }
-
-    if (forcePercent > 100) forcePercent = 100;
-
-    // Apply configurable ffb_gain
-    int eff = (int)((double)forcePercent * s_btnMap.ffb_gain);
-    if (eff < 0) eff = 0;
-    if (eff > 100) eff = 100;
-
-    // Scale to full 16-bit unsigned range (0..65535) for Thrustmaster 40W brushless motor controller
-    uint16_t mag = (uint16_t)(((uint32_t)eff * 65535) / 100);
-
-    // Enable internal spring
-    uint8_t enBuf[4] = { 0x08, 0x04, 0x01, 0x00 };
+static void send_tspc_spring_enable(IOHIDDeviceRef dev, bool enable) {
+    if (!dev) return;
+    uint8_t enBuf[4] = { 0x08, 0x04, (uint8_t)(enable ? 0x01 : 0x00), 0x00 };
     send_tspc_raw_command(dev, enBuf, sizeof(enBuf));
 
-    // Force magnitude (16-bit little-endian: 0x0000 to 0xFFFF)
-    uint8_t forceBuf[4] = { 0x08, 0x03, (uint8_t)(mag & 0xff), (uint8_t)(mag >> 8) };
-    send_tspc_raw_command(dev, forceBuf, sizeof(forceBuf));
-
-    // 0x40 opcodes for dual-firmware compatibility
-    uint8_t enBuf2[4] = { 0x40, 0x04, 0x01, 0x00 };
+    uint8_t enBuf2[4] = { 0x40, 0x04, (uint8_t)(enable ? 0x01 : 0x00), 0x00 };
     send_tspc_raw_command(dev, enBuf2, sizeof(enBuf2));
-
-    uint8_t forceBuf2[4] = { 0x40, 0x03, (uint8_t)(mag & 0xff), (uint8_t)(mag >> 8) };
-    send_tspc_raw_command(dev, forceBuf2, sizeof(forceBuf2));
 }
 
-static void send_tspc_init_ffb(IOHIDDeviceRef dev) {
-    // 1. Open FFB channels
-    send_tspc_open_ffb(dev);
+static void send_tspc_spring_magnitude(IOHIDDeviceRef dev, uint16_t magnitude) {
+    if (!dev) return;
+    uint8_t forceBuf[4] = { 0x08, 0x03, (uint8_t)(magnitude & 0xff), (uint8_t)(magnitude >> 8) };
+    send_tspc_raw_command(dev, forceBuf, sizeof(forceBuf));
 
-    // 2. Kill hardware autocenter spring (0 magnitude + disabled)
-    send_tspc_autocenter(dev, 0, false);
-
-    // 3. Upload initial Constant Force effect (Effect 0, Code 0x6a, Level 0)
-    uint8_t up_pkt[24];
-    memset(up_pkt, 0, sizeof(up_pkt));
-    up_pkt[0] = 0x00;
-    up_pkt[1] = 0x01; // ID 1
-    up_pkt[2] = 0x6a; // Constant Force upload
-    up_pkt[3] = 0x00; // Level 0
-    up_pkt[4] = 0x00;
-    up_pkt[13] = 0x00; // zero
-    up_pkt[14] = 0x4f; // start_marker
-    up_pkt[15] = 0xff; // duration infinite
-    up_pkt[16] = 0xff;
-    up_pkt[22] = 0xff; // end_marker
-    up_pkt[23] = 0xff;
-    send_tspc_raw_command(dev, up_pkt, sizeof(up_pkt));
-
-    // 4. Start playback of Constant Force effect (ID 1, Code 0x89, Play 0x41)
-    uint8_t play_pkt[6];
-    memset(play_pkt, 0, sizeof(play_pkt));
-    play_pkt[0] = 0x00;
-    play_pkt[1] = 0x01; // ID 1
-    play_pkt[2] = 0x89; // Play/Stop header
-    play_pkt[3] = 0x41; // Play opcode
-    send_tspc_raw_command(dev, play_pkt, sizeof(play_pkt));
-
-    bridge_log("TS-PC FFB Engine initialized: Hardware spring disabled, Constant Force slot ready.");
+    uint8_t forceBuf2[4] = { 0x40, 0x03, (uint8_t)(magnitude & 0xff), (uint8_t)(magnitude >> 8) };
+    send_tspc_raw_command(dev, forceBuf2, sizeof(forceBuf2));
 }
 
 static TSPCFfbDebugData s_ffbDebug = { .magic = TSPC_FFB_DEBUG_MAGIC };
@@ -833,24 +783,6 @@ static void update_ffb_debug_telemetry(uint8_t cmd_type, uint8_t raw_force, int1
     pthread_mutex_unlock(&s_ffbDebugLock);
 }
 
-static void send_tspc_constant_force(IOHIDDeviceRef dev, int16_t level) {
-    if (!dev) return;
-
-    // t300rs_update_constant: packet ID 1, code 0x6a, update_type 0x45
-    uint8_t mod_pkt[19];
-    memset(mod_pkt, 0, sizeof(mod_pkt));
-    mod_pkt[0] = 0x00;
-    mod_pkt[1] = 0x01; // ID 1
-    mod_pkt[2] = 0x6a; // Constant Force command
-    mod_pkt[3] = (uint8_t)(level & 0xff);
-    mod_pkt[4] = (uint8_t)((level >> 8) & 0xff);
-    mod_pkt[13] = 0x00; // effect_type
-    mod_pkt[14] = 0x45; // update_type
-    mod_pkt[15] = 0xff; // duration infinite
-    mod_pkt[16] = 0xff;
-
-    send_tspc_raw_command(dev, mod_pkt, sizeof(mod_pkt));
-}
 
 static void send_tspc_range(IOHIDDeviceRef dev, uint16_t degrees) {
     if (degrees < 140) degrees = 140;
@@ -884,9 +816,28 @@ IOReturn hooked_IOHIDDeviceSetReport(IOHIDDeviceRef device, IOHIDReportType type
     ensure_iokit_symbols();
     if (is_tspc_device(device)) {
         if (report && reportLength >= 1) {
+            uint8_t first = report[0];
+            // If this is an internal Thrustmaster command, pass it directly through to the physical hardware!
+            if (first == 0x08 || first == 0x40 || first == 0x02 || first == 0x01 || first == 0x42 || first == 0x43) {
+                if (s_real_IOHIDDeviceSetReport) {
+                    return s_real_IOHIDDeviceSetReport(device, type, reportID, report, reportLength);
+                }
+                return IOHIDDeviceSetReport(device, type, reportID, report, reportLength);
+            }
+
             int offset = 0;
             if (report[0] == 0x00 || report[0] == 0x01) {
                 offset = 1;
+            }
+            if (reportLength > (CFIndex)offset) {
+                uint8_t offByte = report[offset];
+                if ((offByte == 0x08 || offByte == 0x40) && reportLength >= 4 &&
+                    (report[offset + 1] == 0x03 || report[offset + 1] == 0x04 || report[offset + 1] == 0x11)) {
+                    if (s_real_IOHIDDeviceSetReport) {
+                        return s_real_IOHIDDeviceSetReport(device, type, reportID, report, reportLength);
+                    }
+                    return IOHIDDeviceSetReport(device, type, reportID, report, reportLength);
+                }
             }
             
             // 1. Check for Logitech Range Command: 0xf8 0x81 <deg_lo> <deg_hi>
@@ -901,14 +852,26 @@ IOReturn hooked_IOHIDDeviceSetReport(IOHIDDeviceRef device, IOHIDReportType type
                 return kIOReturnSuccess;
             }
 
-            // 2. Check for Logitech Deactivate Force Effect: 0x13
-            if ((reportLength >= offset + 1) && report[offset] == 0x13) {
-                send_tspc_constant_force(device, 0);
-                update_ffb_debug_telemetry(0x13, 0x80, 0, 0, "Slot Désactivé (0 Couple)", NULL, 0);
+            // 2. Check for Logitech Deactivate Force: 0x13 or Disable Autocenter: 0xf5
+            if ((reportLength >= offset + 1) && (report[offset] == 0x13 || report[offset] == 0xf5)) {
+                if (s_btnMap.autocenter_mode == 0) {
+                    send_tspc_spring_magnitude(device, 0);
+                }
+                update_ffb_debug_telemetry(report[offset], 0x80, 0, 0, "Slot Désactivé / Ressort 0", NULL, 0);
                 return kIOReturnSuccess;
             }
-            
-            // 3. Check for Logitech Force Feedback Command: 0x11 0x08 <force> 0x80 ...
+
+            // 3. Check for Logitech Set Autocenter Spring: 0xfe
+            if ((reportLength >= offset + 1) && report[offset] == 0xfe) {
+                if (s_btnMap.autocenter_mode == 1) {
+                    uint16_t mag = (uint16_t)(((uint32_t)s_btnMap.autocenter_wheel_force * 65535) / 100);
+                    send_tspc_spring_magnitude(device, mag);
+                }
+                update_ffb_debug_telemetry(0xfe, 0, 0, 0, "Paramètre Ressort Reçu", NULL, 0);
+                return kIOReturnSuccess;
+            }
+
+            // 4. Check for Logitech Force Feedback Command: 0x11 0x08 <force> 0x80 ... or 0x08 <force>
             if ((reportLength >= offset + 2) && (report[offset] == 0x11 || (report[offset] == 0x08 && reportLength <= 8))) {
                 uint8_t rawForce = 0x80;
                 if (report[offset] == 0x11 && reportLength >= offset + 3) {
@@ -919,50 +882,52 @@ IOReturn hooked_IOHIDDeviceSetReport(IOHIDDeviceRef device, IOHIDReportType type
                 
                 if (s_btnMap.autocenter_mode == 1) {
                     // Wheel mode: static user-configured return-to-center spring
-                    send_tspc_autocenter(device, s_btnMap.autocenter_wheel_force, true);
-                    update_ffb_debug_telemetry(report[offset], rawForce, (int)rawForce - 128, 0,
+                    uint16_t mag = (uint16_t)(((uint32_t)s_btnMap.autocenter_wheel_force * 65535) / 100);
+                    send_tspc_spring_magnitude(device, mag);
+                    update_ffb_debug_telemetry(report[offset], rawForce, (int)rawForce - 128, (int16_t)mag,
                                               "Ressort Matériel Volant", NULL, 0);
                 } else {
-                    // Game mode (Recommended): Continuous torque directly driven by game physics!
-                    // Logitech protocol: 128 (0x80) is neutral / point zero (0 torque: stopped car, straight line).
+                    // Game mode (Recommended): Continuous dynamic torque driven by game physics!
+                    // 0x80 (128) is point zero / neutral (0 torque: stopped car, straight line).
                     int g29_force = (int)rawForce - 128; // -128 to +127
                     if (abs(g29_force) <= 2) {
                         g29_force = 0; // Neutral deadband
                     }
                     
-                    // Map -128..+127 to Thrustmaster native 16-bit range (-16384 .. +16384)
-                    int32_t scaled = ((int32_t)g29_force * 16384) / 127;
-                    scaled = (int32_t)((double)scaled * s_btnMap.ffb_gain);
-                    if (s_btnMap.ffb_invert) {
-                        scaled = -scaled;
+                    uint32_t diff = (uint32_t)abs(g29_force);
+                    uint32_t targetMag = 0;
+                    if (diff > 0) {
+                        targetMag = (diff * 65535 * (uint32_t)s_btnMap.master_gain) / (127 * 100);
+                        targetMag = (uint32_t)((double)targetMag * s_btnMap.ffb_gain);
+                        if (targetMag > 65535) targetMag = 65535;
                     }
-                    if (scaled < -16384) scaled = -16384;
-                    if (scaled > 16384) scaled = 16384;
-                    
-                    static int16_t s_lastLevel = 0;
-                    int16_t level = (int16_t)scaled;
-                    
-                    if (level != s_lastLevel) {
-                        s_lastLevel = level;
-                        send_tspc_constant_force(device, level);
+
+                    // Low-pass exponential smoothing filter: prevents sudden motor steps and à-coups
+                    static uint32_t s_smoothMag = 0;
+                    s_smoothMag = (s_smoothMag * 2 + targetMag) / 3;
+                    uint16_t finalMag = (uint16_t)s_smoothMag;
+
+                    static uint16_t s_lastSentMag = 0xFFFF;
+                    if (abs((int)finalMag - (int)s_lastSentMag) >= 256 || (finalMag == 0 && s_lastSentMag != 0)) {
+                        s_lastSentMag = finalMag;
+                        send_tspc_spring_magnitude(device, finalMag);
                     }
 
                     char ffbDesc[48];
                     if (g29_force == 0) {
                         snprintf(ffbDesc, sizeof(ffbDesc), "Point Zéro (0 Couple)");
                     } else if (g29_force > 0) {
-                        snprintf(ffbDesc, sizeof(ffbDesc), "Braquage Droite (Raw 0x%02X)", rawForce);
+                        snprintf(ffbDesc, sizeof(ffbDesc), "Braquage Droite (Mag %u)", finalMag);
                     } else {
-                        snprintf(ffbDesc, sizeof(ffbDesc), "Braquage Gauche (Raw 0x%02X)", rawForce);
+                        snprintf(ffbDesc, sizeof(ffbDesc), "Braquage Gauche (Mag %u)", finalMag);
                     }
-                    uint8_t mod_pkt[19] = { 0x00, 0x01, 0x6a, (uint8_t)(level & 0xff), (uint8_t)((level >> 8) & 0xff),
-                                            0,0,0,0,0,0,0,0, 0x00, 0x45, 0xff, 0xff, 0x00, 0x00 };
-                    update_ffb_debug_telemetry(report[offset], rawForce, g29_force, level, ffbDesc, mod_pkt, sizeof(mod_pkt));
+                    uint8_t forcePacket[4] = { 0x08, 0x03, (uint8_t)(finalMag & 0xff), (uint8_t)(finalMag >> 8) };
+                    update_ffb_debug_telemetry(report[offset], rawForce, g29_force, (int16_t)finalMag, ffbDesc, forcePacket, sizeof(forcePacket));
                     
                     static int s_ffbLogCount = 0;
                     if (++s_ffbLogCount % 150 == 1) {
-                        bridge_log("G29 FFB: Cloud raw=0x%02X (delta=%d) -> TS-PC Constant Force=%d (gain=%.2fx, inv=%d)",
-                                   rawForce, g29_force, level, s_btnMap.ffb_gain, s_btnMap.ffb_invert);
+                        bridge_log("G29 FFB: Cloud raw=0x%02X (delta=%d) -> TS-PC Dynamic Torque=%u (gain=%.2fx, master=%d%%)",
+                                   rawForce, g29_force, finalMag, s_btnMap.ffb_gain, s_btnMap.master_gain);
                     }
                 }
                 return kIOReturnSuccess;

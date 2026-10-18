@@ -448,6 +448,7 @@ int main(int argc, char **argv) {
             enabled = false;
         }
         tspc_start_listening(NULL, NULL, NULL);
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, false);
         int r = tspc_set_autocenter(force, enabled);
         tspc_stop_listening();
         if (r == 0) {
@@ -466,6 +467,7 @@ int main(int argc, char **argv) {
         }
         int gain = atoi(argv[2]);
         tspc_start_listening(NULL, NULL, NULL);
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, false);
         int r = tspc_set_gain(gain);
         tspc_stop_listening();
         if (r == 0) {
