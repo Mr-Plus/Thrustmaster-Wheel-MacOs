@@ -7,6 +7,7 @@
 #import <stdarg.h>
 #import <time.h>
 #import <math.h>
+#import <dlfcn.h>
 
 #import "TSPCBridge.h"
 
@@ -154,6 +155,7 @@ typedef struct {
     int boost_enabled;
     int autocenter_mode; // 0 = via le jeu (Recommandé), 1 = via le volant
     int autocenter_wheel_force;
+    int ffb_invert; // 0 = standard, 1 = inverse torque
 } TSPCButtonMapping;
 
 static TSPCButtonMapping s_btnMap = {
@@ -171,7 +173,7 @@ static TSPCButtonMapping s_btnMap = {
     .btn_r3 = 12,
     .btn_home = 13,
     .steering_ratio = 0.5,
-    .ffb_gain = 1.2,
+    .ffb_gain = 1.0,
     .master_gain = 75,
     .gain_constant = 100,
     .gain_periodic = 100,
@@ -179,7 +181,8 @@ static TSPCButtonMapping s_btnMap = {
     .gain_damper = 100,
     .boost_enabled = 0,
     .autocenter_mode = 0, // 0 = via le jeu (Recommandé)
-    .autocenter_wheel_force = 50
+    .autocenter_wheel_force = 50,
+    .ffb_invert = 0
 };
 
 static void load_button_mapping(void) {
@@ -224,6 +227,7 @@ static void load_button_mapping(void) {
             else if (strcmp(key, "gain_damper") == 0) s_btnMap.gain_damper = val;
             else if (strcmp(key, "boost_enabled") == 0) s_btnMap.boost_enabled = val;
             else if (strcmp(key, "autocenter_wheel_force") == 0) s_btnMap.autocenter_wheel_force = val;
+            else if (strcmp(key, "ffb_invert") == 0) s_btnMap.ffb_invert = val;
             else if (strcmp(key, "autocenter_mode") == 0) {
                 if (strcmp(strval, "wheel") == 0 || val == 1) {
                     s_btnMap.autocenter_mode = 1;
@@ -234,10 +238,10 @@ static void load_button_mapping(void) {
         }
     }
     fclose(f);
-    bridge_log("Settings loaded: ratio=%.2f, ffb_gain=%.2f, master_gain=%d%%, autocenter_mode=%s (%d%%)",
+    bridge_log("Settings loaded: ratio=%.2f, ffb_gain=%.2f, master_gain=%d%%, autocenter_mode=%s (%d%%), invert=%d",
                s_btnMap.steering_ratio, s_btnMap.ffb_gain, s_btnMap.master_gain,
                s_btnMap.autocenter_mode == 0 ? "via le jeu (Recommandé)" : "via le volant",
-               s_btnMap.autocenter_wheel_force);
+               s_btnMap.autocenter_wheel_force, s_btnMap.ffb_invert);
 }
 
 #define IS_BTN(b) ((b) >= 1 && (b) <= 32 && (ctx->buttons & (1 << ((b) - 1))))
@@ -661,15 +665,35 @@ void hooked_IOHIDDeviceRegisterInputReportCallback(IOHIDDeviceRef device, uint8_
 }
 INTERPOSE(hooked_IOHIDDeviceRegisterInputReportCallback, IOHIDDeviceRegisterInputReportCallback);
 
+typedef IOReturn (*IOHIDDeviceSetReportFunc)(IOHIDDeviceRef, IOHIDReportType, CFIndex, const uint8_t *, CFIndex);
+static IOHIDDeviceSetReportFunc s_real_IOHIDDeviceSetReport = NULL;
+
+static void ensure_iokit_symbols(void) {
+    if (!s_real_IOHIDDeviceSetReport) {
+        void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_LAZY);
+        if (iokit) {
+            s_real_IOHIDDeviceSetReport = (IOHIDDeviceSetReportFunc)dlsym(iokit, "IOHIDDeviceSetReport");
+        }
+    }
+}
+
 static void send_tspc_raw_command(IOHIDDeviceRef dev, const uint8_t *cmd, size_t len) {
     if (!dev || !cmd || len == 0) return;
+    ensure_iokit_symbols();
     uint8_t buf[63];
     memset(buf, 0, sizeof(buf));
     size_t copyLen = len < sizeof(buf) ? len : sizeof(buf);
     memcpy(buf, cmd, copyLen);
-    IOReturn r = IOHIDDeviceSetReport(dev, kIOHIDReportTypeOutput, 0, buf, sizeof(buf));
-    if (r != kIOReturnSuccess) {
-        IOHIDDeviceSetReport(dev, kIOHIDReportTypeOutput, 0x0a, buf, sizeof(buf));
+    if (s_real_IOHIDDeviceSetReport) {
+        IOReturn r = s_real_IOHIDDeviceSetReport(dev, kIOHIDReportTypeOutput, 0, buf, sizeof(buf));
+        if (r != kIOReturnSuccess) {
+            s_real_IOHIDDeviceSetReport(dev, kIOHIDReportTypeOutput, 0x0a, buf, sizeof(buf));
+        }
+    } else {
+        IOReturn r = IOHIDDeviceSetReport(dev, kIOHIDReportTypeOutput, 0, buf, sizeof(buf));
+        if (r != kIOReturnSuccess) {
+            IOHIDDeviceSetReport(dev, kIOHIDReportTypeOutput, 0x0a, buf, sizeof(buf));
+        }
     }
 }
 
@@ -803,8 +827,9 @@ static void send_tspc_gain(IOHIDDeviceRef dev, int gainPercent) {
 IOReturn hooked_IOHIDDeviceSetReport(IOHIDDeviceRef device, IOHIDReportType type,
                                     CFIndex reportID, const uint8_t *report,
                                     CFIndex reportLength) {
+    ensure_iokit_symbols();
     if (is_tspc_device(device)) {
-        if (report && reportLength >= 4) {
+        if (report && reportLength >= 1) {
             int offset = 0;
             if (report[0] == 0x00 || report[0] == 0x01) {
                 offset = 1;
@@ -818,9 +843,15 @@ IOReturn hooked_IOHIDDeviceSetReport(IOHIDDeviceRef device, IOHIDReportType type
                 tspc_set_rotation_range(deg);
                 return kIOReturnSuccess;
             }
+
+            // 2. Check for Logitech Deactivate Force Effect: 0x13
+            if ((reportLength >= offset + 1) && report[offset] == 0x13) {
+                send_tspc_constant_force(device, 0);
+                return kIOReturnSuccess;
+            }
             
-            // 2. Check for Logitech Force Feedback Command: 0x11 0x08 <force> 0x80 ...
-            if ((reportLength >= offset + 2) && (report[offset] == 0x11 || report[offset] == 0x08)) {
+            // 3. Check for Logitech Force Feedback Command: 0x11 0x08 <force> 0x80 ...
+            if ((reportLength >= offset + 2) && (report[offset] == 0x11 || (report[offset] == 0x08 && reportLength <= 8))) {
                 uint8_t rawForce = 0x80;
                 if (report[offset] == 0x11 && reportLength >= offset + 3) {
                     rawForce = report[offset + 2];
@@ -842,6 +873,9 @@ IOReturn hooked_IOHIDDeviceSetReport(IOHIDDeviceRef device, IOHIDReportType type
                     // Map -128..+127 to Thrustmaster native 16-bit range (-16384 .. +16384)
                     int32_t scaled = ((int32_t)g29_force * 16384) / 127;
                     scaled = (int32_t)((double)scaled * s_btnMap.ffb_gain);
+                    if (s_btnMap.ffb_invert) {
+                        scaled = -scaled;
+                    }
                     if (scaled < -16384) scaled = -16384;
                     if (scaled > 16384) scaled = 16384;
                     
@@ -855,8 +889,8 @@ IOReturn hooked_IOHIDDeviceSetReport(IOHIDDeviceRef device, IOHIDReportType type
                     
                     static int s_ffbLogCount = 0;
                     if (++s_ffbLogCount % 150 == 1) {
-                        bridge_log("G29 FFB: Cloud raw=0x%02X (delta=%d) -> TS-PC Constant Force=%d (gain=%.2fx)",
-                                   rawForce, g29_force, level, s_btnMap.ffb_gain);
+                        bridge_log("G29 FFB: Cloud raw=0x%02X (delta=%d) -> TS-PC Constant Force=%d (gain=%.2fx, inv=%d)",
+                                   rawForce, g29_force, level, s_btnMap.ffb_gain, s_btnMap.ffb_invert);
                     }
                 }
                 return kIOReturnSuccess;
@@ -865,6 +899,9 @@ IOReturn hooked_IOHIDDeviceSetReport(IOHIDDeviceRef device, IOHIDReportType type
         return kIOReturnSuccess;
     }
 
+    if (s_real_IOHIDDeviceSetReport) {
+        return s_real_IOHIDDeviceSetReport(device, type, reportID, report, reportLength);
+    }
     return IOHIDDeviceSetReport(device, type, reportID, report, reportLength);
 }
 INTERPOSE(hooked_IOHIDDeviceSetReport, IOHIDDeviceSetReport);
