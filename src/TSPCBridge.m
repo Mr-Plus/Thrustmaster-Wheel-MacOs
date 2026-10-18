@@ -352,9 +352,10 @@ static IOReturn send_output_report(const uint8_t *payload, size_t len) {
         IOHIDDeviceRef dev = (IOHIDDeviceRef)devices[i];
         // Send with report ID 0
         IOReturn r0 = IOHIDDeviceSetReport(dev, kIOHIDReportTypeOutput, 0, buffer, sizeof(buffer));
-        // And with report ID 0x0A
-        IOReturn r10 = IOHIDDeviceSetReport(dev, kIOHIDReportTypeOutput, 0x0a, buffer, sizeof(buffer));
-        lastErr = (r0 == kIOReturnSuccess || r10 == kIOReturnSuccess) ? kIOReturnSuccess : r0;
+        if (r0 != kIOReturnSuccess) {
+            r0 = IOHIDDeviceSetReport(dev, kIOHIDReportTypeOutput, 0x0a, buffer, sizeof(buffer));
+        }
+        lastErr = r0;
     }
 
     CFRelease(devSet);
